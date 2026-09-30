@@ -1,0 +1,178 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"></head><body>
+<title>MiG-29K Carrier Sim</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&family=Saira+Condensed:wght@500;700&display=swap">
+<style>
+  /* Layout: full-bleed 3D view; a single left-docked mission panel over it; data strip along the bottom edge.
+     Palette from the subject: Indian Navy ensign blue, haze grey of the ship, saffron from the roundel, HUD phosphor green for live data. */
+  :root {
+    --navy: #0a1626;
+    --panel: rgba(9, 20, 36, 0.86);
+    --line: rgba(160, 186, 214, 0.18);
+    --fg: #e6edf5;
+    --muted: #93a6bb;
+    --saffron: #ff9a2e;
+    --phosphor: #7dff9c;
+    --warn: #ff5c47;
+    --f-display: "Saira Condensed", "Arial Narrow", sans-serif;
+    --f-body: "IBM Plex Sans", system-ui, sans-serif;
+    --f-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    color-scheme: dark;
+  }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--navy); color: var(--fg); font: 14px/1.45 var(--f-body); overflow: hidden; }
+  #gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #hud { position: fixed; inset: 0; pointer-events: none; }
+  #vignette { position: fixed; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(ellipse at center, rgba(0,0,0,0) 30%, rgba(0,0,0,0.92) 80%); transition: opacity .3s; }
+  #msg { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 18px); left: 50%; transform: translateX(-50%); max-width: min(720px, calc(100% - 32px));
+    background: rgba(8, 18, 30, 0.78); border: 1px solid var(--line); border-left: 3px solid var(--saffron); padding: 10px 16px; border-radius: 4px;
+    font: 500 14px/1.4 var(--f-body); pointer-events: none; text-wrap: balance; }
+  /* bottom data strip */
+  #statusbar { position: fixed; left: 0; right: 0; bottom: 0; padding: 8px 16px calc(env(safe-area-inset-bottom, 0px) + 8px);
+    display: flex; flex-wrap: wrap; gap: 6px 22px; align-items: baseline; background: linear-gradient(to top, rgba(4, 10, 18, 0.85), rgba(4, 10, 18, 0));
+    font: 600 15px/1.2 var(--f-mono); color: var(--phosphor); font-variant-numeric: tabular-nums; pointer-events: none; }
+  #statusbar span.k { font: 500 10px/1 var(--f-body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-right: 6px; }
+  #statusbar .cfg { color: var(--saffron); margin-left: auto; font-size: 13px; }
+  /* mission panel */
+  #menu { position: fixed; top: 0; left: 0; bottom: 0; width: min(460px, 100%); overflow-y: auto; background: var(--panel);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-right: 1px solid var(--line);
+    padding: calc(env(safe-area-inset-top, 0px) + 28px) 28px calc(env(safe-area-inset-bottom, 0px) + 28px); box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 22px; }
+  .brand { display: flex; flex-direction: column; gap: 4px; }
+  .brand .tail { font: 500 11px/1 var(--f-mono); letter-spacing: .18em; color: var(--saffron); text-transform: uppercase; }
+  .brand h1 { margin: 0; font: 700 60px/0.9 var(--f-display); letter-spacing: .01em; }
+  .brand p { margin: 6px 0 0; color: var(--muted); max-width: 44ch; }
+  h2 { margin: 0 0 10px; font: 600 11px/1 var(--f-body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+  .missions { display: flex; flex-direction: column; gap: 8px; }
+  .mission { all: unset; cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 12px 14px; border: 1px solid var(--line);
+    border-radius: 6px; background: rgba(255,255,255,0.02); transition: background .15s, border-color .15s; }
+  .mission:hover, .mission:focus-visible { background: rgba(255, 154, 46, 0.08); border-color: var(--saffron); }
+  .mission:focus-visible { outline: 2px solid var(--saffron); outline-offset: 2px; }
+  .mission b { font: 700 20px/1.1 var(--f-display); text-transform: uppercase; letter-spacing: .02em; }
+  .mission .spec { font: 400 11px/1.3 var(--f-mono); color: var(--phosphor); text-align: right; align-self: center; white-space: nowrap; }
+  .mission span.d { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
+  .opts { display: grid; grid-template-columns: 1fr auto; gap: 10px 16px; align-items: center; }
+  .opts label { color: var(--fg); }
+  .opts small { display: block; color: var(--muted); font-size: 12px; }
+  select, input[type=checkbox] { accent-color: var(--saffron); }
+  select { background: #0f2033; color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; font: 13px var(--f-body); }
+  details { border-top: 1px solid var(--line); padding-top: 14px; }
+  summary { cursor: pointer; font: 600 11px/1 var(--f-body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin-top: 12px; font-size: 13px; }
+  kbd { font: 500 11px/1 var(--f-mono); padding: 3px 6px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: #0e1d2f; color: var(--fg); white-space: nowrap; }
+  .keys div:nth-child(odd) { text-align: right; }
+  #resume { all: unset; cursor: pointer; align-self: flex-start; font: 700 16px/1 var(--f-display); letter-spacing: .08em; text-transform: uppercase;
+    padding: 10px 18px; border-radius: 4px; background: var(--saffron); color: #1b0d00; }
+  #resume:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+  .note { color: var(--muted); font-size: 12px; }
+  #loading { display: flex; flex-direction: column; gap: 8px; }
+  #loading .bar { height: 3px; background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden; }
+  #loadbar { height: 100%; width: 0; background: var(--saffron); transition: width .2s; }
+  #loadtext { font: 500 12px/1 var(--f-mono); color: var(--muted); letter-spacing: .08em; }
+  /* cold-start checklist (top right) */
+  #checklist { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 16px); right: 16px; width: min(300px, calc(100% - 32px)); box-sizing: border-box;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; pointer-events: none; }
+  #checklist h2 { margin-bottom: 8px; color: var(--saffron); }
+  #checklist ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+  #checklist li { display: grid; grid-template-columns: 38px 1fr; gap: 8px; align-items: center; color: var(--muted); }
+  #checklist li kbd { text-align: center; }
+  #checklist li.done { color: var(--phosphor); }
+  #checklist li.done span::before { content: "✓ "; }
+  #checklist li.next { color: var(--fg); font-weight: 600; }
+  #checklist li.next kbd { border-color: var(--saffron); color: var(--saffron); }
+  /* LSO landing report */
+  #report { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(380px, calc(100% - 32px)); box-sizing: border-box;
+    background: var(--panel); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid var(--line); border-top: 3px solid var(--saffron);
+    border-radius: 6px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+  #report .grade { font: 700 34px/1 var(--f-display); text-transform: uppercase; letter-spacing: .02em; text-wrap: balance; }
+  #report dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
+  #report dt { color: var(--muted); }
+  #report dd { margin: 0; font: 600 13px/1.4 var(--f-mono); color: var(--phosphor); font-variant-numeric: tabular-nums; text-align: right; }
+  #report-close { all: unset; cursor: pointer; align-self: flex-end; font: 700 14px/1 var(--f-display); letter-spacing: .08em; text-transform: uppercase;
+    padding: 8px 14px; border-radius: 4px; background: var(--saffron); color: #1b0d00; }
+  #stickmark { position: fixed; width: 18px; height: 18px; margin: -9px 0 0 -9px; border: 2px solid var(--phosphor); border-radius: 50%; pointer-events: none; opacity: .7; }
+  @media (max-width: 520px) { .brand h1 { font-size: 42px; } #menu { padding-inline: 16px; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<canvas id="gl"></canvas>
+<canvas id="hud"></canvas>
+<div id="vignette"></div>
+<div id="msg" hidden></div>
+<div id="stickmark" hidden></div>
+<div id="checklist" hidden><h2>Start checklist</h2><ol></ol></div>
+<div id="report" hidden><h2>LSO grade</h2><div class="grade"></div><dl></dl><button id="report-close">Continue</button></div>
+<div id="statusbar" hidden>
+  <div><span class="k">IAS</span><span id="sb-spd">0</span></div>
+  <div><span class="k">ALT</span><span id="sb-alt">0</span></div>
+  <div><span class="k">Mach</span><span id="sb-mach">0</span></div>
+  <div><span class="k">Load</span><span id="sb-g">1.0</span></div>
+  <div><span class="k">AoA</span><span id="sb-aoa">0</span></div>
+  <div><span class="k">Thr</span><span id="sb-thr">0</span></div>
+  <div><span class="k">Fuel</span><span id="sb-fuel">0</span></div>
+  <div class="cfg" id="sb-cfg"></div>
+</div>
+
+<aside id="menu">
+  <div class="brand">
+    <span class="tail">INAS 303 · Black Panthers · 817</span>
+    <h1>MiG-29K</h1>
+    <p>Carrier flight from INS Vikramaditya: cold start, ski-jump launch, the groove and the wire. RD-33MK engines, KSU-941 fly-by-wire with AoA and g limiters, a moving deck and an LSO who grades every pass.</p>
+  </div>
+  <div id="loading"><div class="bar"><div id="loadbar"></div></div><div id="loadtext">Loading airframe and 4K textures</div></div>
+  <section id="startbox" hidden>
+    <h2>Missions</h2>
+    <div class="missions">
+      <button class="mission" data-scn="cold"><b>Cold start &amp; launch</b><span class="spec">cold · APU</span><span class="d">Cold and dark on the deck, wings folded. Battery, APU, engine start, FBW self-test, spread, then launch.</span></button>
+      <button class="mission" data-scn="deck"><b>Ski-jump launch</b><span class="spec">195 m · 18.8 t</span><span class="d">Engines running on the restraining stops at the long position. Full afterburner, release, fly off the 14° ramp.</span></button>
+      <button class="mission" data-scn="short"><b>Short launch</b><span class="spec">105 m · 16.4 t</span><span class="d">Forward position, light fuel. Less deck run: the jet leaves the ramp below flying speed and has to accelerate on the climb.</span></button>
+      <button class="mission" data-scn="approach"><b>Carrier trap</b><span class="spec">5 km · 4.0° GS</span><span class="d">On final with gear, flaps and hook down. Fly the ball at 10.5° AoA, MIL at touchdown, catch wire 2 or 3.</span></button>
+      <button class="mission" data-scn="free"><b>Free flight</b><span class="spec">3,000 m · 830 km/h</span><span class="d">Clean aircraft over the Arabian Sea, carrier steaming north at 23 knots.</span></button>
+    </div>
+  </section>
+  <button id="resume" hidden>Resume</button>
+  <section>
+    <h2>Settings</h2>
+    <div class="opts">
+      <label for="opt-fbw">Fly-by-wire normal law<small>Off = direct law, no AoA or g protection</small></label><input type="checkbox" id="opt-fbw" checked>
+      <label for="opt-units">Units</label><select id="opt-units"><option value="metric">km/h · m</option><option value="imperial">kt · ft</option></select>
+      <label for="opt-sound">Engine sound</label><input type="checkbox" id="opt-sound" checked>
+      <label for="opt-voice">Voice warnings &amp; LSO<small>Spoken cockpit warnings and LSO calls</small></label><input type="checkbox" id="opt-voice" checked>
+      <label for="opt-sea">Sea state<small>Deck motion, air wake behind the ship</small></label><select id="opt-sea"><option value="0">Calm</option><option value="1">Moderate</option><option value="1.8">Rough</option></select>
+      <label for="opt-mouse">Mouse stick<small>Mouse position flies the jet (toggle with Y)</small></label><input type="checkbox" id="opt-mouse">
+      <label for="opt-quality">Render quality</label><select id="opt-quality"><option value="high">High</option><option value="medium">Medium</option></select>
+    </div>
+  </section>
+  <details open>
+    <summary>Controls</summary>
+    <div class="keys">
+      <div><kbd>W</kbd> <kbd>S</kbd> / <kbd>↑</kbd> <kbd>↓</kbd></div><div>Pitch: nose down / nose up</div>
+      <div><kbd>A</kbd> <kbd>D</kbd> / <kbd>←</kbd> <kbd>→</kbd></div><div>Roll</div>
+      <div><kbd>Q</kbd> <kbd>E</kbd></div><div>Rudder, nose-wheel steering on deck</div>
+      <div><kbd>Shift</kbd>/<kbd>R</kbd> · <kbd>F</kbd></div><div>Throttle up · down. Stops at the MIL detent: release and press again for afterburner</div>
+      <div><kbd>Tab</kbd> <kbd>0</kbd></div><div>Full afterburner / MIL toggle · idle</div>
+      <div><kbd>1</kbd> <kbd>2</kbd></div><div>Battery · APU start</div>
+      <div><kbd>3</kbd> <kbd>4</kbd> <kbd>End</kbd></div><div>Left · right engine start · shut down (on deck)</div>
+      <div><kbd>Space</kbd></div><div>Release restraining stops (launch)</div>
+      <div><kbd>G</kbd> <kbd>L</kbd> <kbd>H</kbd></div><div>Gear · flaps · tail hook (hook up releases the wire)</div>
+      <div><kbd>B</kbd> <kbd>X</kbd> <kbd>N</kbd></div><div>Speed brake · wheel brakes (hold) · parking brake</div>
+      <div><kbd>O</kbd> <kbd>K</kbd> <kbd>I</kbd></div><div>Fold wings (deck) · canopy · refuelling probe</div>
+      <div><kbd>C</kbd> <kbd>V</kbd></div><div>Cockpit ↔ chase · cycle views (orbit, flyby, deck)</div>
+      <div>Drag · wheel · double-click</div><div>Look around / orbit · zoom · recentre</div>
+      <div><kbd>Y</kbd> <kbd>M</kbd> <kbd>U</kbd></div><div>Mouse stick · FBW law · units</div>
+      <div><kbd>P</kbd> <kbd>Esc</kbd> <kbd>⌫</kbd></div><div>Pause · menu · restart mission</div>
+    </div>
+    <p class="note">Gamepad: left stick flies, right stick looks, triggers throttle, bumpers rudder, A gear, B hook, X flaps, Y view, Back launch.</p>
+  </details>
+</aside>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module" src="main.js"></script>
+</body></html>
