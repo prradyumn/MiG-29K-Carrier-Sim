@@ -90,7 +90,9 @@ export function makeSky(scene, renderer, sunElev = 28, sunAz = 215) {
   sky.scale.setScalar(1000);
   const u = sky.material.uniforms;
   // follow the camera; the march starts at its height (km)
-  sky.onBeforeRender = (r, s, cam) => { sky.position.copy(cam.position); u.uAlt.value = Math.max(0, cam.position.y) / 1000; };
+  // (matrixWorld must be refreshed here: it was computed before this callback, and after a camera jump of more
+  //  than the sphere's radius a stale sphere would leave the camera outside the sky for one black frame)
+  sky.onBeforeRender = (r, s, cam) => { sky.position.copy(cam.position); sky.updateMatrixWorld(); u.uAlt.value = Math.max(0, cam.position.y) / 1000; };
   const sun = new THREE.Vector3().setFromSphericalCoords(1, (90 - sunElev) * D2R, sunAz * D2R);
   u.sunPosition.value.copy(sun);
   scene.add(sky);

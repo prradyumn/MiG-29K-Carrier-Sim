@@ -1007,7 +1007,7 @@ function postUpdate(dt) {
   _sc.copy(sunLight.color).multiplyScalar(sunLight.intensity * (n > 0.9 ? 0.6 : 1.0));
   _top.set(n > 0.9 ? 0x0b1220 : n > 0.3 ? 0x6a6f8e : 0x8fb2dc).multiplyScalar(n > 0.9 ? 0.25 : 1.0);
   _bot.set(n > 0.9 ? 0x05070b : n > 0.3 ? 0x4a3c3c : 0x7d8894);
-  const cine = state.replay || state.view === 'flyby' || state.view === 'deck';
+  const cine = state.replay || state.view === 'flyby';   // depth of field for cinematic views only, never while flying
   postfx.update(state.paused ? 0 : dt, { sun, sunCol: _sc, skyTop: _top, skyBot: _bot, fogCol: scene.fog.color, fogD: scene.fog.density, night: n,
     cover: n > 0.9 ? 0.38 : n > 0.3 ? 0.5 : 0.44, dof: cine ? 1 : 0, focus: camera.position.distanceTo(ac.pos), flare: n < 0.3 });
 }

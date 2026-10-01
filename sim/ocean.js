@@ -119,18 +119,20 @@ export class Ocean extends THREE.Mesh {
             float tt = uTime / 9.0, i0 = floor(tt), fr = smoothstep(0.0, 1.0, fract(tt));
             vec2 q = (vWPos.xz - vec2(0.0, uTime * 5.5)) * 0.045;
             float n = mix(fbm(q + i0 * 17.31), fbm(q + (i0 + 1.0) * 17.31), fr);
-            float thr = mix(0.76, 0.63, smoothstep(0.3, 1.8, uSea));
-            float froth = fbm(vWPos.xz * 0.55 + vec2(uTime * 0.15, uTime * 0.6));
-            float far = smoothstep(2.0, 7.0, foot);                    // froth detail averages out first
-            float cap = smoothstep(thr, thr + 0.05, n) * mix(smoothstep(0.3, 0.62, froth), 0.55, far);
-            cap = mix(cap, smoothstep(0.3, 1.8, uSea) * 0.06, smoothstep(30.0, 90.0, foot));   // then whole patches
+            float thr = mix(0.775, 0.635, smoothstep(0.3, 1.8, uSea));
+            float far = smoothstep(0.35, 1.4, foot);                   // ~1.8 m froth detail averages out first (no glitter)
+            float froth = far < 1.0 ? fbm(vWPos.xz * 0.55 + vec2(uTime * 0.15, uTime * 0.6)) : 0.5;
+            float cap = smoothstep(thr, thr + 0.08, n) * mix(smoothstep(0.3, 0.62, froth), 0.5, far);
+            cap = mix(cap, smoothstep(0.3, 1.8, uSea) * 0.05, smoothstep(5.0, 16.0, foot));    // then whole ~22 m patches
             float wc = cap * (dfade > 0.0 ? mix(1.0, 0.45 + 0.9 * vCrest, dfade) : 1.0) * smoothstep(0.25, 0.9, uSea);
             // long wind streaks of spent foam in a rough sea
-            float streaks = smoothstep(0.6, 0.78, fbm(vec2(vWPos.x * 0.07, (vWPos.z - uTime * 3.0) * 0.009))) * smoothstep(1.0, 1.8, uSea) * (1.0 - far) * 0.35;
-            foam = max(foam, max(wc * 0.9, streaks));
+            float streaks = 0.0;
+            if (uSea > 1.0 && far < 1.0) streaks = smoothstep(0.6, 0.78, fbm(vec2(vWPos.x * 0.07, (vWPos.z - uTime * 3.0) * 0.009))) * smoothstep(1.0, 1.8, uSea) * (1.0 - far) * 0.35;
+            foam = max(foam, max(wc * mix(0.9, 0.4, smoothstep(0.5, 5.0, foot)), streaks));   // distant caps soften into haze
           }
           float slick = 0.0;
-          if (uShip.w > 0.0) {
+          // the wake and bow wave only exist within a few km of the ship: skip their noise everywhere else
+          if (uShip.w > 0.0 && length(vWPos.xz - uShip.xy) < 2600.0) {
             vec2 rel = vWPos.xz - uShip.xy; vec2 fwd = vec2(sin(uShip.z), -cos(uShip.z));
             float along = -dot(rel, fwd) - 140.0;                 // metres aft of the stern
             float side = abs(rel.x * fwd.y - rel.y * fwd.x);

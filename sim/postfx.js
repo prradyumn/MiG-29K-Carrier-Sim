@@ -16,7 +16,7 @@ const DEPTH = `
   float viewDepth(vec2 uv) { float d = texture2D(tDepth, uv).x; return exp2(d * uLogFar) - 1.0; }
   vec3 viewPos(vec2 uv, float w) { return vec3((uv * 2.0 - 1.0) * uTan * w, -w); }
 `;
-const _v = new THREE.Vector3(), _m = new THREE.Matrix4(), _s2 = new THREE.Vector2();
+const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s2 = new THREE.Vector2();
 const VERT = `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
 // ---------------------------------------------------------------- 3D noise for the clouds (generated once, 64^3)
@@ -94,12 +94,13 @@ class ScenePost extends Pass {
       uniforms: { ...THREE.UniformsUtils.clone(common), tNoise: { value: this.noise }, tCov: { value: this.cov }, uCam: { value: new THREE.Vector3() },
         uInvView: { value: new THREE.Matrix4() }, uSun: { value: new THREE.Vector3(0, 1, 0) }, uSunCol: { value: new THREE.Color(1, 1, 1) },
         uSkyTop: { value: new THREE.Color(0.5, 0.6, 0.8) }, uSkyBot: { value: new THREE.Color(0.3, 0.32, 0.36) }, uFogCol: { value: new THREE.Color() },
-        uFogD: { value: 0.00003 }, uCover: { value: 0.45 }, uTime: { value: 0 }, uBase: { value: 1500 }, uTop: { value: 3200 }, uRes: { value: new THREE.Vector2() } },
+        uFogD: { value: 0.00003 }, uCover: { value: 0.45 }, uTime: { value: 0 }, uBase: { value: 1500 }, uTop: { value: 3200 }, uFrame: { value: 0 }, uRes: { value: new THREE.Vector2() } },
       vertexShader: VERT, fragmentShader: DEPTH + `
         precision highp sampler3D;
         uniform sampler3D tNoise; uniform sampler2D tCov; uniform vec3 uCam, uSun, uSunCol, uSkyTop, uSkyBot, uFogCol; uniform mat4 uInvView;
-        uniform float uFogD, uCover, uTime, uBase, uTop; uniform vec2 uRes; varying vec2 vUv;
-        float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+        uniform float uFogD, uCover, uTime, uBase, uTop, uFrame; uniform vec2 uRes; varying vec2 vUv;
+        // interleaved gradient noise, rotated every frame: an even, stable dither that the temporal resolve averages out
+        float ign(vec2 p) { return fract(52.9829189 * fract(dot(p + uFrame * 5.588238, vec2(0.06711056, 0.00583715)))); }
         float density(vec3 p) {
           float h = (p.y - uBase) / (uTop - uBase); if (h < 0.0 || h > 1.0) return 0.0;
           vec2 wind = vec2(0.0, uTime * 6.0);
@@ -112,18 +113,50 @@ class ScenePost extends Pass {
           return d;
         }
         float lightMarch(vec3 p) { float t = 0.0; for (int i = 0; i < 5; i++) { p += uSun * 140.0; t += density(p); } return exp(-t * 0.9); }
+        float lightMarch3(vec3 p) { float t = 0.0; for (int i = 0; i < 3; i++) { p += uSun * 220.0; t += density(p); } return exp(-t * 1.3); }
+        // the clouds seen in the sea: a rough mirror shows them as soft shapes, so one sample of the cloud coverage
+        // where the reflected ray crosses the middle of the layer is enough (and cannot alias into blocks)
+        vec4 reflectClouds(vec3 o, vec3 r, float j) {
+          if (r.y <= 0.02) return vec4(0.0, 0.0, 0.0, 1.0);
+          float tm = (mix(uBase, uTop, 0.3) - o.y) / r.y; if (tm > 40000.0) return vec4(0.0, 0.0, 0.0, 1.0);
+          vec2 q = o.xz + r.xz * tm + vec2(0.0, uTime * 6.0);
+          float cov = texture2D(tCov, q / 38000.0).r;
+          cov = smoothstep(1.0 - uCover + 0.06, 1.0 - uCover + 0.42, cov);
+          float n = texture(tNoise, vec3(q.x, 900.0, q.y) / 2600.0).r;
+          float a = clamp(cov * (0.55 + 0.6 * n), 0.0, 0.85);
+          vec3 L = uSunCol * 0.35 * (0.6 + 0.4 * max(uSun.y, 0.0)) + mix(uSkyBot, uSkyTop, 0.6) * 0.8;
+          return vec4(L * a, 1.0 - a);
+        }
         void main() {
           float w = viewDepth(vUv);
           vec3 vd = normalize(viewPos(vUv, 1.0));
           vec3 rd = normalize((uInvView * vec4(vd, 0.0)).xyz);
           float sceneT = (w > 100000.0) ? 1e9 : w / max(-vd.z, 1e-3);
+          float jit = ign(gl_FragCoord.xy);
+          // reflections of the clouds in the sea (where the view ray ends on the water, not the ship or the jet)
+          vec4 refl = vec4(0.0, 0.0, 0.0, 1.0); float fres = 0.0;
+          if (sceneT < 1e8) {
+            vec3 hp = uCam + rd * sceneT;
+            if (abs(hp.y) < 4.0 && sceneT > 25.0) {
+              vec3 rr = reflect(rd, vec3(0.0, 1.0, 0.0));
+              // wobble from the swell, more with distance (the water is a rough mirror)
+              rr.xz += (vec2(sin(hp.x * 0.05 + uTime * 0.7), cos(hp.z * 0.043 - uTime * 0.6)) * 0.02) * (1.0 + sceneT / 4000.0);
+              rr = normalize(rr);
+              float cosI = clamp(-rd.y, 0.0, 1.0); fres = 0.02 + 0.98 * pow(1.0 - cosI, 5.0);
+              refl = reflectClouds(hp, rr, jit);
+            }
+          }
           // intersect the cloud slab
           float t0, t1;
-          if (abs(rd.y) < 1e-4) { if (uCam.y < uBase || uCam.y > uTop) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; } t0 = 0.0; t1 = 60000.0; }
+          // the reflection replaces some of the sky the water was reflecting with the cloud (dark bases, bright tops)
+          float rk = fres * (1.0 - refl.a) * 0.8;
+          vec3 reflAdd = fres * refl.rgb * 0.8;
+          if (abs(rd.y) < 1e-4) { if (uCam.y < uBase || uCam.y > uTop) { gl_FragColor = vec4(reflAdd, 1.0 - rk); return; } t0 = 0.0; t1 = 60000.0; }
           else { float ta = (uBase - uCam.y) / rd.y, tb = (uTop - uCam.y) / rd.y; t0 = max(min(ta, tb), 0.0); t1 = max(ta, tb); }
-          t1 = min(t1, min(sceneT, 60000.0));
-          if (t1 <= t0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
-          float steps = 56.0, dt = (t1 - t0) / steps, t = t0 + dt * hash(vUv * uRes + uTime);
+          // never march more than 40 km of slab: long grazing rays otherwise take kilometre steps and turn to noise
+          t1 = min(t1, min(sceneT, t0 + 40000.0));
+          if (t1 <= t0) { gl_FragColor = vec4(reflAdd, 1.0 - rk); return; }
+          float steps = 56.0, dt = (t1 - t0) / steps, t = t0 + dt * jit;
           float cosT = dot(rd, uSun), g = 0.55;
           float phase = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosT, 1.5) * 0.08 + 0.6;
           vec3 col = vec3(0.0); float T = 1.0;
@@ -142,7 +175,27 @@ class ScenePost extends Pass {
             }
             t += dt;
           }
-          gl_FragColor = vec4(col, T);
+          // the reflection sits behind any cloud between the eye and the water
+          gl_FragColor = vec4(col + T * reflAdd, T * (1.0 - rk));
+        }` }));
+    // temporal resolve of the half-resolution clouds: the previous result, reprojected by camera rotation (clouds
+    // are kilometres away, so translation hardly matters), clamped to this frame's 3x3 neighbourhood (no ghosts)
+    // and blended 85 / 15. Removes the march noise without smearing.
+    this.cloudHist = [half(), half()]; this.histI = 0; this.histOK = false; this.frame = 0;
+    this.resolve = new FullScreenQuad(new THREE.ShaderMaterial({
+      uniforms: { tCur: { value: null }, tHist: { value: null }, uPrevVPr: { value: new THREE.Matrix4() }, uInvViewR: { value: new THREE.Matrix4() }, uTan: { value: new THREE.Vector2(1, 1) },
+        uTexel: { value: new THREE.Vector2() }, uBlend: { value: 0 } },
+      vertexShader: VERT, fragmentShader: `
+        uniform sampler2D tCur, tHist; uniform mat4 uPrevVPr, uInvViewR; uniform vec2 uTan, uTexel; uniform float uBlend; varying vec2 vUv;
+        void main() {
+          vec4 c = texture2D(tCur, vUv), mn = c, mx = c;
+          for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) { vec4 s = texture2D(tCur, vUv + vec2(float(x), float(y)) * uTexel); mn = min(mn, s); mx = max(mx, s); }
+          vec3 rd = mat3(uInvViewR) * normalize(vec3((vUv * 2.0 - 1.0) * uTan, -1.0));
+          vec4 pc = uPrevVPr * vec4(rd, 0.0); vec2 pu = pc.xy / pc.w * 0.5 + 0.5;
+          float ok = (pc.w > 0.0 && pu.x > 0.0 && pu.x < 1.0 && pu.y > 0.0 && pu.y < 1.0) ? uBlend : 0.0;
+          vec4 h = clamp(texture2D(tHist, pu), mn, mx);
+          vec4 o = mix(c, h, ok);
+          gl_FragColor = (any(isnan(o)) || any(isinf(o))) ? vec4(0.0, 0.0, 0.0, 1.0) : o;
         }` }));
     this.mix = new FullScreenQuad(new THREE.ShaderMaterial({
       uniforms: { ...THREE.UniformsUtils.clone(common), tColor: { value: null }, tAO: { value: null }, tCloud: { value: null }, uAO: { value: 1 }, uClouds: { value: 1 }, uTexel: { value: new THREE.Vector2() },
@@ -203,7 +256,8 @@ class ScenePost extends Pass {
               c.rgb += f * vis * 3.0;
             }
           }
-          gl_FragColor = c;
+          if (any(isnan(c)) || any(isinf(c))) c = vec4(0.0, 0.0, 0.0, 1.0);
+          gl_FragColor = vec4(min(c.rgb, vec3(60000.0)), 1.0);
         }` }));
     this.blur = new FullScreenQuad(new THREE.ShaderMaterial({
       uniforms: { ...THREE.UniformsUtils.clone(common), tColor: { value: null }, uPrevVP: { value: new THREE.Matrix4() }, uInvView: { value: new THREE.Matrix4() },
@@ -213,29 +267,34 @@ class ScenePost extends Pass {
         void main() {
           float w = min(viewDepth(vUv), 60000.0);
           vec3 wp = (uInvView * vec4(viewPos(vUv, w), 1.0)).xyz;
-          vec4 pc = uPrevVP * vec4(wp, 1.0); vec2 prev = pc.xy / pc.w * 0.5 + 0.5;
+          vec4 pc = uPrevVP * vec4(wp, 1.0); vec2 prev = pc.w > 0.0 ? pc.xy / pc.w * 0.5 + 0.5 : vUv;
           // moving objects (own jet, tanker) are reprojected with their own motion, not the world's
           for (int k = 0; k < 2; k++) if (uObj[k].w > 0.0) {
             float inside = 1.0 - smoothstep(uObj[k].w * 0.8, uObj[k].w, distance(wp, uObj[k].xyz));
             if (inside > 0.0) { vec4 po = uObjVP[k] * vec4(wp, 1.0); prev = mix(prev, po.xy / po.w * 0.5 + 0.5, inside); }
           }
           vec2 vel = (vUv - prev) * uMB * smoothstep(3.0, 6.0, w);            // the cockpit moves with the camera: no blur
-          float vl = length(vel / uTexel); if (vl > 40.0) vel *= 40.0 / vl;
+          if (any(isnan(vel)) || any(isinf(vel))) vel = vec2(0.0);
+          float vl = length(vel / uTexel); if (vl > 24.0) vel *= 24.0 / vl;       // a streak, never a smear
           vec3 acc = texture2D(tColor, vUv).rgb; float n = 1.0;
           if (uMB > 0.0 && vl > 0.5) for (int i = 1; i <= 8; i++) { float f = float(i) / 8.0 - 0.5; acc += texture2D(tColor, vUv - vel * f).rgb; n += 1.0; }
           vec3 c = acc / n;
           if (uDOF > 0.0) {   // circle of confusion around the focus distance
-            float coc = clamp(abs(w - uFocus) / max(w, 1.0) * uDOF * 14.0, 0.0, 9.0);
+            float coc = clamp(abs(w - uFocus) / max(w, 1.0) * uDOF * 9.0, 0.0, 6.0);
             if (coc > 0.6) { vec3 b = c; float m = 1.0;
               for (int i = 0; i < 12; i++) { float a = float(i) * 2.39996, r = sqrt(float(i) / 12.0) * coc; b += texture2D(tColor, vUv + vec2(cos(a), sin(a)) * r * uTexel).rgb; m += 1.0; }
               c = b / m; }
           }
+          if (any(isnan(c)) || any(isinf(c))) c = texture2D(tColor, vUv).rgb;
           gl_FragColor = vec4(c, 1.0);
         }` }));
-    this.prevVP = new THREE.Matrix4(); this.movers = []; this.opts = { ao: true, clouds: true, mb: 0.5, dof: 0, focus: 50 };
+    this.prevVP = new THREE.Matrix4(); this.movers = []; this.opts = { ao: true, clouds: true, mb: 0.35, dof: 0, focus: 50 };
+    this.prevCam = { p: new THREE.Vector3(), q: new THREE.Quaternion(), fov: 0, valid: false };
   }
   setSize(w, h) {
     this.aoRT.setSize(Math.max(1, w >> 1), Math.max(1, h >> 1)); this.cloudRT.setSize(Math.max(1, w >> 1), Math.max(1, h >> 1)); this.mixRT.setSize(w, h);
+    for (const r of this.cloudHist) r.setSize(Math.max(1, w >> 1), Math.max(1, h >> 1)); this.histOK = false;
+    this.resolve.material.uniforms.uTexel.value.set(2 / w, 2 / h);
     this.ao.material.uniforms.uRes.value.set(w >> 1, h >> 1); this.cloud.material.uniforms.uRes.value.set(w >> 1, h >> 1);
     this.mix.material.uniforms.uTexel.value.set(1 / w, 1 / h); this.blur.material.uniforms.uTexel.value.set(1 / w, 1 / h);
   }
@@ -243,10 +302,26 @@ class ScenePost extends Pass {
     const cam = this.camera, o = this.opts;
     const logFar = Math.log2(cam.far + 1), tanY = Math.tan(cam.fov * Math.PI / 360), tan = new THREE.Vector2(tanY * cam.aspect, tanY);
     for (const q of [this.ao, this.cloud, this.blur, this.mix]) { const u = q.material.uniforms; u.tDepth.value = readBuffer.depthTexture; u.uLogFar.value = logFar; u.uTan.value.copy(tan); }
-    if (o.ao) { renderer.setRenderTarget(this.aoRT); this.ao.render(renderer); }
-    if (o.clouds) { const u = this.cloud.material.uniforms; u.uCam.value.copy(cam.position); u.uInvView.value.copy(cam.matrixWorld); renderer.setRenderTarget(this.cloudRT); this.cloud.render(renderer); }
-    const m = this.mix.material.uniforms; m.tColor.value = readBuffer.texture; m.uHzInv.value.copy(cam.matrixWorld); m.uCamP.value.copy(cam.position); m.tAO.value = this.aoRT.texture; m.tCloud.value = this.cloudRT.texture; m.uAO.value = o.ao ? 1 : 0; m.uClouds.value = o.clouds ? 1 : 0;
+    // a camera cut (mission start, view change, replay jump): nothing on screen continues from the last frame, so
+    // motion blur and the cloud history must not reach back across it
+    const pc = this.prevCam, cq = cam.getWorldQuaternion(_q), cp = cam.getWorldPosition(_v2);
+    const cut = !pc.valid || cp.distanceTo(pc.p) > 60 || 2 * Math.acos(Math.min(1, Math.abs(cq.dot(pc.q)))) > 0.5 || Math.abs(cam.fov - pc.fov) > 8;
     const vp = new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    if (cut) { this.prevVP.copy(vp); this.histOK = false; for (const mv of this.movers) mv.prev = null; }
+    if (o.ao) { renderer.setRenderTarget(this.aoRT); this.ao.render(renderer); }
+    let cloudTex = this.cloudRT.texture;
+    if (o.clouds) { const u = this.cloud.material.uniforms; u.uCam.value.copy(cam.position); u.uInvView.value.copy(cam.matrixWorld); u.uFrame.value = (this.frame++) % 64;
+      renderer.setRenderTarget(this.cloudRT); this.cloud.render(renderer);
+      const r = this.resolve.material.uniforms, out = this.cloudHist[this.histI], hist = this.cloudHist[1 - this.histI];
+      r.tCur.value = this.cloudRT.texture; r.tHist.value = hist.texture; r.uTan.value.copy(tan); r.uBlend.value = this.histOK ? 0.85 : 0;
+      r.uInvViewR.value.extractRotation(cam.matrixWorld); r.uPrevVPr.value.copy(this.prevVPr || vp);
+      renderer.setRenderTarget(out); this.resolve.render(renderer);
+      cloudTex = out.texture; this.histI = 1 - this.histI; this.histOK = true;
+      // rotation-only view-projection of this frame, for the next frame's reprojection
+      (this.prevVPr ||= new THREE.Matrix4()).multiplyMatrices(cam.projectionMatrix, _m2.extractRotation(cam.matrixWorld).invert());
+    }
+    pc.p.copy(cp); pc.q.copy(cq); pc.fov = cam.fov; pc.valid = true;
+    const m = this.mix.material.uniforms; m.tColor.value = readBuffer.texture; m.uHzInv.value.copy(cam.matrixWorld); m.uCamP.value.copy(cam.position); m.tAO.value = this.aoRT.texture; m.tCloud.value = cloudTex; m.uAO.value = o.ao ? 1 : 0; m.uClouds.value = o.clouds ? 1 : 0;
     const b = this.blur.material.uniforms;
     if (o.mb > 0 || o.dof > 0) {
       renderer.setRenderTarget(this.mixRT); this.mix.render(renderer);
@@ -273,7 +348,7 @@ class ScenePost extends Pass {
 
 // ---------------------------------------------------------------- final grade (after tone mapping, display space)
 const GradeShader = {
-  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uVig: { value: 0.32 }, uGrain: { value: 0.025 }, uCA: { value: 0.0012 }, uSat: { value: 1.06 }, uCon: { value: 1.04 } },
+  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uVig: { value: 0.32 }, uGrain: { value: 0.01 }, uCA: { value: 0.0006 }, uSat: { value: 1.06 }, uCon: { value: 1.04 } },
   vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: `
     uniform sampler2D tDiffuse; uniform float uTime, uVig, uGrain, uCA, uSat, uCon; varying vec2 vUv;
@@ -317,7 +392,7 @@ export class PostFX {
   setQuality(q) {
     const o = this.post.opts;
     this.enabled = q !== 'low';
-    o.ao = q === 'high' || q === 'ultra'; o.clouds = q !== 'low'; o.mb = q === 'high' || q === 'ultra' ? 0.5 : 0;
+    o.ao = q === 'high' || q === 'ultra'; o.clouds = q !== 'low'; o.mb = q === 'high' || q === 'ultra' ? 0.35 : 0;
     this.bloom.enabled = q !== 'low';
   }
   // per frame: sky colours for the clouds, sun flare position, DOF focus
