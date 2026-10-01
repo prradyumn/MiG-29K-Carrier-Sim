@@ -1,3 +1,19 @@
 {
-    "liveServer.settings.port": 5501
+    "liveServer.settings.port": 5501,
+    // serve the simulator folder only (open http://127.0.0.1:5501/)
+    "liveServer.settings.root": "/sim",
+    // Live Server reloads the page when ANY watched file changes. Film renders, Blender frames, test
+    // screenshots and zips are written outside the sim while you fly, so they must never trigger a reload.
+    "liveServer.settings.ignoreFiles": [
+        "promo/**",
+        "blender/**",
+        "tests/**",
+        "renders/**",
+        "node_modules/**",
+        "**/*.zip",
+        "**/*.blend",
+        "**/*.log",
+        ".vscode/**",
+        "CLAUDE.md"
+    ]
 }

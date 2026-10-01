@@ -41,6 +41,21 @@ export class Sound {
   thump(k = 1) { this.burst(90, 0.4, 0.9 * k); this.burst(1800, 0.12, 0.12 * k, 'highpass'); }
   clunk() { this.burst(260, 0.18, 0.35); }
   cable() { this.burst(600, 1.6, 0.5, 'bandpass'); this.burst(70, 1.2, 0.8); }
+  // step-complete chime for the instructor: two soft notes
+  chime() {
+    if (!this.ok) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    [[880, 0], [1320, 0.11]].forEach(([f, d]) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t + d); g.gain.exponentialRampToValueAtTime(0.05, t + d + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.35);
+      o.connect(g); g.connect(this.master); o.start(t + d); o.stop(t + d + 0.4); });
+  }
+  // cockpit controls: toggle snap, guard flip, button, heavy gear lever, T-handle pull
+  switchClick(kind = 'toggle') {
+    if (!this.ok) return;
+    const k = { toggle: [3200, 0.035, 0.45], guard: [1500, 0.06, 0.4], button: [2200, 0.03, 0.3], lever: [420, 0.18, 0.6], pull: [900, 0.09, 0.45] }[kind] || [2400, 0.04, 0.35];
+    this.burst(k[0], k[1], k[2], 'bandpass');
+    if (kind === 'lever' || kind === 'pull') this.burst(160, 0.12, 0.35);
+  }
   squeal() { if (!this.ok) return; const ctx = this.ctx, o = ctx.createOscillator(); o.type = 'sawtooth'; const g = ctx.createGain(); const t = ctx.currentTime;
     o.frequency.setValueAtTime(1400, t); o.frequency.exponentialRampToValueAtTime(700, t + 0.35); g.gain.setValueAtTime(0.06, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
     const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1200; o.connect(f); f.connect(g); g.connect(this.master); o.start(t); o.stop(t + 0.45); }
@@ -52,11 +67,15 @@ export class Sound {
     this.lastSpoken[key] = now;
     try {
       const u = new SpeechSynthesisUtterance(text);
-      u.rate = voice === 'lso' ? 1.15 : 1.05; u.pitch = voice === 'lso' ? 0.8 : 1.25; u.volume = 0.9;
+      const ins = voice === 'instructor';
+      u.rate = voice === 'lso' ? 1.15 : ins ? 1.02 : 1.05; u.pitch = voice === 'lso' ? 0.8 : ins ? 1.0 : 1.25; u.volume = 0.9;
       const vs = speechSynthesis.getVoices();
-      const pick = vs.find(v => /en[-_](GB|IN|US)/i.test(v.lang) && (voice === 'lso' ? /male|daniel|rishi|alex/i.test(v.name) : /female|samantha|veena|karen|serena/i.test(v.name))) || vs.find(v => /^en/i.test(v.lang));
+      // three distinct voices: the LSO (male, clipped), the instructor (Indian or British English), cockpit warnings (female)
+      const pick = (ins && (vs.find(v => /en[-_]IN/i.test(v.lang)) || vs.find(v => /en[-_]GB/i.test(v.lang) && !/female/i.test(v.name))))
+        || vs.find(v => /en[-_](GB|IN|US)/i.test(v.lang) && (voice === 'lso' ? /male|daniel|rishi|alex/i.test(v.name) : /female|samantha|veena|karen|serena/i.test(v.name))) || vs.find(v => /^en/i.test(v.lang));
       if (pick) u.voice = pick;
-      if (voice === 'lso') speechSynthesis.cancel();
+      // a new LSO call or instructor step replaces whatever was still being said
+      if (voice === 'lso' || ins) speechSynthesis.cancel();
       speechSynthesis.speak(u);
     } catch (e) { }
   }

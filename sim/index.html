@@ -1,5 +1,6 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"></head><body>
 <title>MiG-29K Carrier Sim</title>
+<link rel="icon" href="favicon.ico">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&family=Saira+Condensed:wght@500;700&display=swap">
@@ -92,8 +93,86 @@
   #report dd { margin: 0; font: 600 13px/1.4 var(--f-mono); color: var(--phosphor); font-variant-numeric: tabular-nums; text-align: right; }
   #report-close { all: unset; cursor: pointer; align-self: flex-end; font: 700 14px/1 var(--f-display); letter-spacing: .08em; text-transform: uppercase;
     padding: 8px 14px; border-radius: 4px; background: var(--saffron); color: #1b0d00; }
+  #vignette.red { background: radial-gradient(ellipse at center, rgba(120,0,0,0.25) 20%, rgba(90,0,0,0.9) 80%); }
+  /* cockpit control tooltip */
+  #ctltip { position: fixed; z-index: 5; pointer-events: none; background: rgba(8, 18, 30, 0.9); border: 1px solid var(--line); border-left: 3px solid var(--saffron);
+    padding: 6px 10px; border-radius: 4px; font: 500 13px/1.35 var(--f-body); display: flex; flex-direction: column; max-width: 260px; }
+  #ctltip span { font: 600 12px/1.3 var(--f-mono); color: var(--phosphor); }
   #stickmark { position: fixed; width: 18px; height: 18px; margin: -9px 0 0 -9px; border: 2px solid var(--phosphor); border-radius: 50%; pointer-events: none; opacity: .7; }
+  /* training list */
+  .lessons { display: grid; grid-template-columns: 1fr; gap: 6px; }
+  .lesson { all: unset; cursor: pointer; display: grid; grid-template-columns: 26px 1fr auto; gap: 2px 10px; align-items: baseline; padding: 9px 12px;
+    border: 1px solid var(--line); border-radius: 6px; background: rgba(255,255,255,0.02); transition: background .15s, border-color .15s; }
+  .lesson:hover, .lesson:focus-visible { background: rgba(255, 154, 46, 0.08); border-color: var(--saffron); }
+  .lesson:focus-visible { outline: 2px solid var(--saffron); outline-offset: 2px; }
+  .lesson .n { font: 700 18px/1 var(--f-display); color: var(--saffron); }
+  .lesson b { font: 600 15px/1.2 var(--f-body); }
+  .lesson .st { font: 13px/1 var(--f-mono); color: var(--saffron); letter-spacing: .1em; white-space: nowrap; }
+  .lesson .d { grid-column: 2 / -1; color: var(--muted); font-size: 12.5px; line-height: 1.35; }
+  .tabs { display: flex; gap: 6px; }
+  .tabs button { all: unset; cursor: pointer; padding: 6px 12px; border-radius: 4px; border: 1px solid var(--line); font: 600 12px/1 var(--f-body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .tabs button[aria-selected=true] { color: var(--fg); border-color: var(--saffron); background: rgba(255,154,46,0.1); }
+  .tabs button:focus-visible { outline: 2px solid var(--saffron); outline-offset: 2px; }
+  /* instructor panel */
+  #coach { position: fixed; left: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); width: min(430px, calc(100% - 32px)); box-sizing: border-box;
+    background: rgba(8, 18, 30, 0.88); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid var(--line); border-top: 3px solid var(--saffron);
+    border-radius: 6px; padding: 12px 14px 10px; display: flex; flex-direction: column; gap: 6px; z-index: 3; }
+  #coach .hd { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  #coach .ct { font: 700 17px/1.1 var(--f-display); text-transform: uppercase; letter-spacing: .03em; }
+  #coach .cs { font: 500 11px/1 var(--f-mono); color: var(--muted); letter-spacing: .08em; white-space: nowrap; }
+  #coach .say { margin: 0; font: 500 15px/1.4 var(--f-body); text-wrap: pretty; }
+  #coach .why { margin: 0; font: 400 13px/1.4 var(--f-body); color: var(--muted); border-left: 2px solid rgba(125,255,156,0.5); padding-left: 8px; text-wrap: pretty; }
+  #coach .bar { height: 3px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden; }
+  #coach .bar i { display: block; height: 100%; width: 0; background: var(--saffron); transition: width .4s; }
+  #coach .cb { display: flex; gap: 6px; flex-wrap: wrap; }
+  #coach .cb button, .btn { all: unset; cursor: pointer; font: 600 12px/1 var(--f-body); letter-spacing: .04em; padding: 7px 10px; border-radius: 4px; border: 1px solid var(--line); color: var(--fg); background: rgba(255,255,255,0.04); }
+  #coach .cb button:hover, .btn:hover { border-color: var(--saffron); }
+  #coach .cb button:focus-visible, .btn:focus-visible { outline: 2px solid var(--saffron); outline-offset: 2px; }
+  .btn.primary { background: var(--saffron); color: #1b0d00; border-color: var(--saffron); }
+  #coacharrow { position: fixed; width: 0; height: 0; border-top: 14px solid transparent; border-bottom: 14px solid transparent; border-left: 26px solid var(--saffron);
+    filter: drop-shadow(0 0 6px rgba(255,154,46,0.8)); pointer-events: none; z-index: 3; animation: pulse 0.9s ease-in-out infinite alternate; }
+  @keyframes pulse { from { opacity: .55; } to { opacity: 1; } }
+  /* debrief */
+  #debrief { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; background: rgba(2, 6, 12, 0.55); padding: 16px; }
+  #debrief .card { width: min(980px, 100%); max-height: calc(100vh - 32px); overflow: auto; box-sizing: border-box; background: var(--panel); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--line); border-top: 3px solid var(--saffron); border-radius: 8px; padding: 18px 20px; display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 14px 20px; }
+  #debrief header { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  #debrief .dt { margin: 0; font: 700 30px/1 var(--f-display); text-transform: uppercase; }
+  #debrief .dr { font: 600 15px/1.3 var(--f-mono); color: var(--saffron); }
+  #debrief .dr span { color: var(--muted); margin-left: 8px; font-weight: 500; }
+  #debrief .dr .bad { color: var(--warn); }
+  #debrief canvas { width: 100%; height: 340px; display: block; }
+  #debrief .dm { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  #debrief .dm li { display: grid; grid-template-columns: 44px 1fr; gap: 8px; font-size: 13px; }
+  #debrief .dm .tt { font: 500 12px/1.5 var(--f-mono); color: var(--warn); }
+  #debrief .dm b { font-weight: 600; } #debrief .dm p { margin: 2px 0 0; color: var(--muted); }
+  #debrief .dm .clean { display: block; } #debrief .dm .clean b { color: var(--phosphor); }
+  #debrief dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
+  #debrief dt { color: var(--muted); } #debrief dd { margin: 0; font: 600 13px/1.4 var(--f-mono); color: var(--phosphor); text-align: right; }
+  #debrief footer { grid-column: 1 / -1; display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  #debrief h2 { margin-bottom: 8px; }
+  @media (max-width: 760px) { #debrief .card { grid-template-columns: 1fr; } #debrief canvas { height: 260px; } }
+  /* replay bar */
+  #replay { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 56px); transform: translateX(-50%); width: min(620px, calc(100% - 32px)); box-sizing: border-box;
+    display: flex; gap: 10px; align-items: center; background: rgba(8, 18, 30, 0.88); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; z-index: 4; }
+  #replay .rl { font: 700 13px/1 var(--f-display); letter-spacing: .1em; color: var(--warn); text-transform: uppercase; }
+  #replay input { flex: 1; accent-color: var(--saffron); min-width: 0; }
+  #replay .rt { font: 500 12px/1 var(--f-mono); color: var(--muted); min-width: 56px; text-align: right; }
+  /* controller mapping */
+  #bindings { position: fixed; inset: 0; z-index: 7; display: grid; place-items: center; background: rgba(2, 6, 12, 0.55); padding: 16px; }
+  #bindings .card { width: min(620px, 100%); max-height: calc(100vh - 32px); overflow: auto; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line);
+    border-top: 3px solid var(--saffron); border-radius: 8px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+  #bindings h3 { margin: 8px 0 2px; font: 600 11px/1 var(--f-body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+  .brow { display: grid; grid-template-columns: 1fr 110px auto auto 70px; gap: 8px; align-items: center; font-size: 13px; padding: 3px 0; border-bottom: 1px solid rgba(160,186,214,0.08); }
+  .brow code { font: 500 12px/1 var(--f-mono); color: var(--phosphor); }
+  .brow button { all: unset; cursor: pointer; font: 600 11px/1 var(--f-body); padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; }
+  .brow button:hover { border-color: var(--saffron); }
+  .binv { font-size: 12px; color: var(--muted); display: flex; gap: 4px; align-items: center; }
+  .bstatus { font: 500 12px/1.3 var(--f-mono); color: var(--saffron); min-height: 1.3em; }
+  .bopts { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; align-items: center; font-size: 13px; }
+  @media (max-width: 560px) { .brow { grid-template-columns: 1fr auto auto; } .brow code, .binv { grid-column: 1; } }
   @media (max-width: 520px) { .brand h1 { font-size: 42px; } #menu { padding-inline: 16px; } }
+  .capture #msg, .capture #statusbar, .capture #ctltip, .capture #checklist { display: none !important; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 
@@ -102,6 +181,34 @@
 <div id="vignette"></div>
 <div id="msg" hidden></div>
 <div id="stickmark" hidden></div>
+<div id="ctltip" hidden></div>
+<div id="coacharrow" hidden></div>
+<section id="coach" hidden aria-live="polite">
+  <div class="hd"><span class="ct"></span><span class="cs"></span></div>
+  <div class="bar"><i></i></div>
+  <p class="say"></p>
+  <p class="why"></p>
+  <div class="cb"><button data-c="show">Show me (T)</button><button data-c="repeat">Repeat</button><button data-c="skip">Skip step</button><button data-c="quit">End lesson</button></div>
+</section>
+<div id="replay" hidden><span class="rl">● Replay</span><button class="btn" data-r="play">Pause</button><input type="range" aria-label="Replay position"><span class="rt"></span><button class="btn" data-r="speed">1×</button><button class="btn" data-r="exit">Exit (Z)</button></div>
+<div id="debrief" hidden>
+  <div class="card" role="dialog" aria-label="Flight debrief">
+    <header><h1 class="dt"></h1><div class="dr"></div></header>
+    <section><h2>Flight record</h2><canvas aria-label="Time history of airspeed, altitude, angle of attack, load factor and glide slope"></canvas></section>
+    <section><h2>What to work on</h2><ul class="dm"></ul><h2 style="margin-top:14px">Numbers</h2><dl class="dk"></dl></section>
+    <footer><button class="btn" data-d="replay">Watch replay</button><button class="btn" data-d="retry">Retry lesson</button><button class="btn primary" data-d="next">Next lesson</button><button class="btn" data-d="close">Close</button></footer>
+  </div>
+</div>
+<div id="bindings" hidden>
+  <div class="card" role="dialog" aria-label="Controller setup">
+    <h2>Controller setup</h2>
+    <p class="note">Click Bind, then move the axis or press the button on your gamepad, joystick or HOTAS. A bound throttle axis is absolute: the last part of its travel is the afterburner.</p>
+    <div class="bstatus"></div>
+    <div class="bopts"><label for="bdz">Dead zone</label><input id="bdz" data-b="dz" type="range" min="0" max="0.3" step="0.01"><label for="bcv">Response curve</label><input id="bcv" data-b="curve" type="range" min="1" max="3" step="0.1"></div>
+    <div class="brows"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" data-b="reset">Reset to defaults</button><button class="btn primary" data-b="close">Done</button></div>
+  </div>
+</div>
 <div id="checklist" hidden><h2>Start checklist</h2><ol></ol></div>
 <div id="report" hidden><h2>LSO grade</h2><div class="grade"></div><dl></dl><button id="report-close">Continue</button></div>
 <div id="statusbar" hidden>
@@ -123,13 +230,19 @@
   </div>
   <div id="loading"><div class="bar"><div id="loadbar"></div></div><div id="loadtext">Loading airframe and 4K textures</div></div>
   <section id="startbox" hidden>
-    <h2>Missions</h2>
+    <div class="tabs" role="tablist"><button role="tab" id="tab-train" aria-selected="true">Training</button><button role="tab" id="tab-free" aria-selected="false">Free missions</button></div>
+    <div id="pane-train" style="margin-top:12px"><p class="note" style="margin:0 0 10px">An instructor talks you through each lesson, points at the controls, explains why, and debriefs you at the end. Start with lesson 1.</p><div class="lessons" id="lessons"></div></div>
+    <div id="pane-free" hidden style="margin-top:12px">
     <div class="missions">
       <button class="mission" data-scn="cold"><b>Cold start &amp; launch</b><span class="spec">cold · APU</span><span class="d">Cold and dark on the deck, wings folded. Battery, APU, engine start, FBW self-test, spread, then launch.</span></button>
       <button class="mission" data-scn="deck"><b>Ski-jump launch</b><span class="spec">195 m · 18.8 t</span><span class="d">Engines running on the restraining stops at the long position. Full afterburner, release, fly off the 14° ramp.</span></button>
       <button class="mission" data-scn="short"><b>Short launch</b><span class="spec">105 m · 16.4 t</span><span class="d">Forward position, light fuel. Less deck run: the jet leaves the ramp below flying speed and has to accelerate on the climb.</span></button>
       <button class="mission" data-scn="approach"><b>Carrier trap</b><span class="spec">5 km · 4.0° GS</span><span class="d">On final with gear, flaps and hook down. Fly the ball at 10.5° AoA, MIL at touchdown, catch wire 2 or 3.</span></button>
+      <button class="mission" data-scn="circuit"><b>Carrier circuit</b><span class="spec">300 m · 650 km/h</span><span class="d">Run in on the ship, break, downwind checks, the 180° turn into the groove and the trap.</span></button>
+      <button class="mission" data-scn="approach" data-night="1"><b>Night trap</b><span class="spec">night · 4.0° GS</span><span class="d">The approach in the dark: lens, centreline and drop lights, and the deck floodlights.</span></button>
+      <button class="mission" data-scn="tanker"><b>Air refuelling</b><span class="spec">5,000 m · 500 km/h</span><span class="d">Join a buddy tanker MiG-29K, probe out, and plug the drogue at walking pace.</span></button>
       <button class="mission" data-scn="free"><b>Free flight</b><span class="spec">3,000 m · 830 km/h</span><span class="d">Clean aircraft over the Arabian Sea, carrier steaming north at 23 knots.</span></button>
+    </div>
     </div>
   </section>
   <button id="resume" hidden>Resume</button>
@@ -142,6 +255,9 @@
       <label for="opt-voice">Voice warnings &amp; LSO<small>Spoken cockpit warnings and LSO calls</small></label><input type="checkbox" id="opt-voice" checked>
       <label for="opt-sea">Sea state<small>Deck motion, air wake behind the ship</small></label><select id="opt-sea"><option value="0">Calm</option><option value="1">Moderate</option><option value="1.8">Rough</option></select>
       <label for="opt-mouse">Mouse stick<small>Mouse position flies the jet (toggle with Y)</small></label><input type="checkbox" id="opt-mouse">
+      <label for="opt-tod">Time of day<small>Free missions (lessons set their own)</small></label><select id="opt-tod"><option value="day">Day</option><option value="dusk">Dusk</option><option value="night">Night</option></select>
+      <label for="opt-rumble">Controller rumble<small>Stick shaker, touchdown, trap</small></label><input type="checkbox" id="opt-rumble" checked>
+      <label>Controllers<small>Gamepad, joystick, HOTAS mapping</small></label><button class="btn" id="opt-bind" type="button">Set up…</button>
       <label for="opt-quality">Render quality</label><select id="opt-quality"><option value="high">High</option><option value="medium">Medium</option></select>
     </div>
   </section>
@@ -153,8 +269,10 @@
       <div><kbd>Q</kbd> <kbd>E</kbd></div><div>Rudder, nose-wheel steering on deck</div>
       <div><kbd>Shift</kbd>/<kbd>R</kbd> · <kbd>F</kbd></div><div>Throttle up · down. Stops at the MIL detent: release and press again for afterburner</div>
       <div><kbd>Tab</kbd> <kbd>0</kbd></div><div>Full afterburner / MIL toggle · idle</div>
-      <div><kbd>1</kbd> <kbd>2</kbd></div><div>Battery · APU start</div>
-      <div><kbd>3</kbd> <kbd>4</kbd> <kbd>End</kbd></div><div>Left · right engine start · shut down (on deck)</div>
+      <div>Click</div><div>Operate any cockpit switch, guard, lever or handle (hover for its name)</div>
+      <div><kbd>1</kbd> <kbd>5</kbd> <kbd>2</kbd></div><div>Battery · fuel pump · APU</div>
+      <div><kbd>3</kbd> <kbd>4</kbd> <kbd>6</kbd></div><div>Left · right engine (master, then START) · generators</div>
+      <div><kbd>7</kbd> <kbd>End</kbd> <kbd>J</kbd></div><div>Nav lights + beacon · engine masters off (deck) · reset master caution</div>
       <div><kbd>Space</kbd></div><div>Release restraining stops (launch)</div>
       <div><kbd>G</kbd> <kbd>L</kbd> <kbd>H</kbd></div><div>Gear · flaps · tail hook (hook up releases the wire)</div>
       <div><kbd>B</kbd> <kbd>X</kbd> <kbd>N</kbd></div><div>Speed brake · wheel brakes (hold) · parking brake</div>
@@ -162,9 +280,10 @@
       <div><kbd>C</kbd> <kbd>V</kbd></div><div>Cockpit ↔ chase · cycle views (orbit, flyby, deck)</div>
       <div>Drag · wheel · double-click</div><div>Look around / orbit · zoom · recentre</div>
       <div><kbd>Y</kbd> <kbd>M</kbd> <kbd>U</kbd></div><div>Mouse stick · FBW law · units</div>
+      <div><kbd>T</kbd> <kbd>Z</kbd></div><div>Look at the highlighted control · instant replay (last 45 s)</div>
       <div><kbd>P</kbd> <kbd>Esc</kbd> <kbd>⌫</kbd></div><div>Pause · menu · restart mission</div>
     </div>
-    <p class="note">Gamepad: left stick flies, right stick looks, triggers throttle, bumpers rudder, A gear, B hook, X flaps, Y view, Back launch.</p>
+    <p class="note">Gamepad (default): left stick flies, right stick looks, triggers throttle, bumpers rudder, A gear, B hook, X flaps, Y view, Back launch. Remap anything, including a HOTAS throttle, under Settings → Controllers.</p>
   </details>
 </aside>
 

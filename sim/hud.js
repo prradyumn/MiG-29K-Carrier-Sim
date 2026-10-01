@@ -152,6 +152,15 @@ export class HUD {
       }
       g.textAlign = 'left';
     }
+    // refuelling: range and closure to the drogue
+    if (env.tanker) {
+      const T = env.tanker; g.textAlign = 'right';
+      g.fillText(T.contact ? (T.state === 'fuel' ? 'FUEL +' + Math.round(T.transfer) + ' KG' : 'CONTACT') : 'DROGUE ' + (T.range < 99 ? T.range.toFixed(1) : '--') + ' M', rx, ly + fs * 5.2);
+      // the hose reel wants 1 to 3.5 m of push-in for the fuel valve to open
+      if (T.contact) g.fillText(T.pushIn < 0.8 ? 'PUSH IN' : T.pushIn > 3.3 ? 'BACK OFF' : 'IN RANGE', rx, ly + fs * 6.5);
+      if (!T.contact && T.range < 60) g.fillText('VC ' + (T.closure >= 0 ? '+' : '') + T.closure.toFixed(1), rx, ly + fs * 6.5);
+      g.textAlign = 'left';
+    }
     // flight-control law annunciation
     if (ac.lawName && ac.lawName !== 'NORMAL') { g.textAlign = 'center'; g.fillText(ac.lawName === 'LANDING' ? 'ПОС' : ac.lawName === 'GROUND' ? '' : 'DIRECT', bx, by - sy * 0.9); g.textAlign = 'left'; }
     if (!ac.fbwReady) { g.textAlign = 'center'; g.fillText('FCS TEST ' + Math.round(ac.fbwBit * 100) + '%', bx, by + sy * 0.25); }

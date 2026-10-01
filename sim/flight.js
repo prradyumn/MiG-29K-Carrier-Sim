@@ -58,28 +58,46 @@ const CNB_MACH = [[0, 0.115], [0.9, 0.12], [1.2, 0.10], [2.0, 0.065]];
 // ---------------------------------------------------------------- RD-33MK engine
 class Engine {
   constructor(side) {
-    this.side = side; this.state = 'off'; this.N = 0; this.AB = 0; this.egt = 25; this.T = 0; this.ff = 0;
-    this.startT = 0; this.lit = false; this.chr = false;
+    this.side = side; this.i = side < 0 ? 0 : 1; this.state = 'off'; this.N = 0; this.AB = 0; this.egt = 25; this.T = 0; this.ff = 0;
+    this.startT = 0; this.lit = false; this.chr = false; this.damaged = false; this.hotT = 0;
   }
+  get name() { return this.side < 0 ? 'Left' : 'Right'; }
   running() { return this.state === 'running'; }
   update(dt, ac, thr, M, sigma, Vias, air) {
     const idle = DATA.N_IDLE;
-    const fuel = ac.fuel > 0 && !this.cut;
+    // fuel reaches the engine through its master (shut-off) valve; the boost pump gives the start pressure
+    const master = ac.sw.eng[this.i];
+    const fuel = ac.fuel > 0 && !this.cut && master && !ac.fail.eng[this.i];
     if (this.state === 'starting') {
       this.startT += dt;
       const bleed = ac.apu.state === 'running' || ac.groundAir;
-      if (!bleed && this.N < 0.45) { this.state = 'off'; ac.msg('Engine start aborted: no APU air', 3); }
+      const airstart = air && Vias > 90;          // windmilling relight in flight
+      if (!master) { this.state = 'off'; this.lit = false; ac.msg(this.name + ' engine start aborted: master OFF', 3); ac.event('startabort', { i: this.i }); }
+      else if (!bleed && !airstart && this.N < 0.45) { this.state = 'off'; this.lit = false; ac.msg('Engine start aborted: no APU air', 3); ac.event('startabort', { i: this.i }); }
       // starter spins the core to ~25%, ignition near 18%, self-sustaining above ~45%, idle ~70%
       const target = this.N < 0.25 ? 0.26 : idle;
-      const rate = this.N < 0.25 ? 0.022 : (this.lit ? 0.018 + 0.03 * (this.N - 0.25) : 0.004);
+      const rate = this.N < 0.25 ? (airstart && !bleed ? 0.012 : 0.022) : (this.lit ? 0.018 + 0.03 * (this.N - 0.25) : 0.004);
       this.N = Math.min(this.N + rate * dt, target + 0.001);
-      if (!this.lit && this.N > 0.18 && fuel) { this.lit = true; }
-      if (this.lit) this.egt = approach(this.egt, this.N < 0.5 ? 640 : 460, 90 * dt);
-      else this.egt = approach(this.egt, 40, 20 * dt);
-      if (this.N >= idle - 0.002) { this.state = 'running'; this.N = idle; ac.msg((this.side < 0 ? 'Left' : 'Right') + ' engine at idle', 2.5); }
-      if (this.startT > 90) { this.state = 'off'; ac.msg('Hung start', 3); }
+      const pressure = ac.sw.pump || air;
+      if (!this.lit && this.N > 0.18 && fuel && pressure) { this.lit = true; ac.event('lightoff', { i: this.i }); }
+      if (this.lit) {
+        // throttle forward during a ground start over-fuels the engine: a hot start (in flight the start fuel control meters it)
+        const over = thr > 0.12 && !air;
+        this.egt = approach(this.egt, over ? 1020 : this.N < 0.5 ? 640 : 460, (over ? 170 : 90) * dt);
+        if (this.egt > 870) {
+          if (this.hotT === 0) { ac.msg('HOT START: ' + this.name + ' T4 over 870°C! Throttle IDLE and engine master OFF now', 4); ac.event('hotstart', { i: this.i }); }
+          this.hotT += dt;
+          if (this.hotT > 2.5) { this.damaged = true; this.state = 'off'; this.lit = false; ac.msg(this.name + ' engine damaged by over-temperature (turbine overheated)', 6); ac.event('mistake', { what: 'Hot start: throttle advanced during the engine start', i: this.i }); }
+        } else this.hotT = Math.max(0, this.hotT - dt);
+      } else this.egt = approach(this.egt, 40, 20 * dt);
+      if (this.state === 'starting' && this.N >= idle - 0.002) { this.state = 'running'; this.N = idle; this.hotT = 0; ac.msg(this.name + ' engine at idle', 2.5); ac.event('engidle', { i: this.i }); }
+      if (this.state === 'starting' && !this.lit && this.startT > 30) {
+        this.state = 'off'; ac.msg('No light-off on the ' + this.name.toLowerCase() + ' engine: ' + (!ac.sw.pump && !air ? 'no fuel pressure (fuel pump OFF)' : 'no fuel'), 4);
+        ac.event('mistake', { what: 'Engine start without fuel pressure (fuel pump off)', i: this.i });
+      }
+      if (this.state === 'starting' && this.startT > 90) { this.state = 'off'; ac.msg('Hung start', 3); }
     } else if (this.state === 'running') {
-      if (!fuel) { this.state = 'off'; this.lit = false; ac.msg((this.side < 0 ? 'Left' : 'Right') + ' engine flame-out', 4); }
+      if (!fuel) { this.state = 'off'; this.lit = false; ac.msg(this.name + (master ? ' engine flame-out' : ' engine shut down'), 4); ac.event(master ? 'flameout' : 'engoff', { i: this.i }); }
       const milCmd = clamp(thr / 0.85, 0, 1);
       const target = idle + (DATA.N_MIL - idle) * milCmd;
       const k = target > this.N ? 1.9 : 1.6;
@@ -87,6 +105,7 @@ class Engine {
     } else {
       // off: windmilling in the air, spool down on the ground
       const wm = air ? clamp(Vias / 250, 0, 1) * 0.28 : 0;
+      this.AB = approach(this.AB, 0, 3 * dt);
       this.N = approach(this.N, wm, 0.03 * dt);
       this.lit = false;
       this.egt = approach(this.egt, 25, 6 * dt);
@@ -112,7 +131,7 @@ class Engine {
     this.T = T;
     this.ff = this.state === 'off' ? 0 : Math.max(T, 1200) * (this.AB > 0.01 ? lerp(DATA.sfcDry, DATA.sfcAB, this.AB) : DATA.sfcDry) * (0.65 + 0.35 * nf);
     if (this.state === 'running') {
-      const egtT = 440 + 330 * Math.pow(nf, 1.6) + 60 * this.AB + 25 * M;
+      const egtT = 440 + 330 * Math.pow(nf, 1.6) + 60 * this.AB + 25 * M + (ac.fail.fire[this.i] ? 260 : 0);
       this.egt = approach(this.egt, egtT, 120 * dt);
     }
     return T;
@@ -137,7 +156,13 @@ export class Aircraft {
     this.foldCmd = 0; this.fold = 0;
     this.parkBrake = false; this.nws = true;
     // systems
-    this.battery = true; this.apu = { state: 'off', N: 0, t: 0 }; this.groundAir = false;
+    this.battery = true; this.batCharge = 1; this.apu = { state: 'off', N: 0, t: 0 }; this.groundAir = false;
+    // cockpit switches (the start panel on the left wall, lights on the right panel)
+    this.sw = { pump: true, apu: false, eng: [true, true], gen: [true, true], navlt: true, beacon: true, ldglt: false };
+    this.probeCmd = 0; this.probe = 0;
+    // failures: engine flame-out, engine fire, flight-control computer ('transient' resets, 'hard' does not), hydraulic systems
+    this.fail = { eng: [false, false], fire: [false, false], fireT: [0, 0], fireOffT: [0, 0], fcs: false, hyd: [false, false] };
+    this.tyresBurst = false; this.shaker = 0;
     this.engines = [new Engine(-1), new Engine(1)];
     this.fbwMode = 'normal';   // 'normal' | 'direct'
     this.fbwBit = 1;           // 0..1 self-test progress (1 = passed)
@@ -180,42 +205,91 @@ export class Aircraft {
 
   // electrical power available: 'gen' | 'apu' | 'bat' | 'none'
   power() {
-    if (this.engines.some(e => e.running() && e.N > 0.6)) return 'gen';
+    if (this.engines.some((e, i) => e.running() && e.N > 0.6 && this.sw.gen[i])) return 'gen';
     if (this.apu.state === 'running') return 'apu';
-    return this.battery ? 'bat' : 'none';
+    return this.battery && this.batCharge > 0 ? 'bat' : 'none';
   }
-  hydraulics() { return clamp(Math.max(this.engines[0].N, this.engines[1].N) / 0.55, 0, 1); }
+  genOnline(i) { return this.engines[i].running() && this.engines[i].N > 0.6 && this.sw.gen[i]; }
+  // both hydraulic systems are driven from the accessory gearbox (either engine); a failed system halves actuator rate
+  hydSys(i) { return this.fail.hyd[i] ? 0 : clamp(Math.max(this.engines[0].N, this.engines[1].N) / 0.55, 0, 1); }
+  hydraulics() { return (this.hydSys(0) + this.hydSys(1)) / 2; }
 
   setEnginesRunning() {
     for (const e of this.engines) { e.state = 'running'; e.N = DATA.N_IDLE; e.egt = 440; e.lit = true; }
-    this.apu.state = 'off'; this.fbwBit = 1; this.fbwReady = true; this.battery = true;
+    this.apu.state = 'off'; this.fbwBit = 1; this.fbwReady = true; this.battery = true; this.batCharge = 1;
+    Object.assign(this.sw, { pump: true, apu: false, eng: [true, true], gen: [true, true], navlt: true, beacon: true });
   }
   coldAndDark() {
     for (const e of this.engines) { e.state = 'off'; e.N = 0; e.egt = 28; e.lit = false; }
     this.battery = false; this.apu = { state: 'off', N: 0, t: 0 }; this.fbwBit = 0; this.fbwReady = false;
+    Object.assign(this.sw, { pump: false, apu: false, eng: [false, false], gen: [false, false], navlt: false, beacon: false, ldglt: false });
     this.canopyCmd = this.canopy = 1; this.inp.throttle = 0;
   }
-  startApu() {
-    if (!this.battery) { this.msg('APU needs battery power: switch the battery on first (1)', 3); return; }
+  setBattery(on) {
+    this.battery = on;
+    if (!on && this.apu.state !== 'off' && this.power() !== 'gen') { this.apu.state = 'off'; this.msg('APU shut down: no battery', 2.5); }
+    this.event('switch', { sw: 'bat', on });
+  }
+  // APU master switch: ON starts the GTDE-117 and keeps it running until switched OFF
+  setApu(on) {
+    this.sw.apu = on;
+    this.event('switch', { sw: 'apu', on });
+    if (!on) { if (this.apu.state !== 'off') { this.apu.state = 'off'; this.msg('APU off', 2); } return; }
+    if (!this.battery || this.batCharge <= 0.05) { this.msg('APU needs battery power: battery ON first', 3); return; }
     if (this.apu.state !== 'off') return;
     this.apu.state = 'starting'; this.apu.t = 0; this.msg('APU start', 2);
   }
+  startApu() { this.setApu(!this.sw.apu); }
+  setEngineMaster(i, on) {
+    this.sw.eng[i] = on; this.event('switch', { sw: 'eng', i, on });
+    if (!on && this.fail.fire[i]) this.msg((i ? 'Right' : 'Left') + ' engine fuel shut off: fire extinguisher discharged', 3);
+  }
+  setGen(i, on) { this.sw.gen[i] = on; this.event('switch', { sw: 'gen', i, on }); }
+  setPump(on) { this.sw.pump = on; this.event('switch', { sw: 'pump', on }); }
   startEngine(i) {
     const e = this.engines[i];
-    if (e.state !== 'off') return;
-    if (this.apu.state !== 'running' && !this.groundAir) { this.msg('Engine start needs APU air: start the APU first (2)', 3.5); return; }
-    if (this.inp.throttle > 0.05) { this.msg('Throttle must be at IDLE for engine start', 3); return; }
-    e.state = 'starting'; e.startT = 0; e.lit = false;
-    this.msg((i === 0 ? 'Left' : 'Right') + ' engine start', 2.5);
+    if (e.state !== 'off') return false;
+    const air = !this.onGround;
+    if (e.damaged) { this.msg(e.name + ' engine is damaged: it will not start', 3); return false; }
+    if (!this.sw.eng[i]) { this.msg(e.name + ' engine master is OFF: no fuel to the engine. Switch it ON first', 3.5); this.event('mistake', { what: 'Start button pressed with the engine master OFF' }); return false; }
+    if (!air && this.apu.state !== 'running' && !this.groundAir) { this.msg('Engine start needs APU air: start the APU first and wait for on-speed', 3.5); this.event('mistake', { what: 'Engine start attempted before the APU was on speed' }); return false; }
+    if (air && this.t.ias < 90 && this.apu.state !== 'running') { this.msg('Airstart needs more than 330 km/h to windmill the engine', 3); return false; }
+    if (!air && this.inp.throttle > 0.05) { this.msg('Throttle must be at IDLE for engine start', 3); return false; }
+    e.state = 'starting'; e.startT = 0; e.lit = false; e.hotT = 0;
+    this.msg(e.name + ' engine start', 2.5); this.event('startbtn', { i });
+    return true;
   }
-  shutdown() { for (const e of this.engines) if (e.state !== 'off') { e.state = 'off'; } this.msg('Engines shut down', 2.5); }
+  shutdown() { for (let i = 0; i < 2; i++) this.sw.eng[i] = false; this.msg('Engine masters OFF: engines shutting down', 2.5); }
+  // failure injection (emergency training)
+  failEngine(i) { this.fail.eng[i] = true; this.event('fail', { what: 'eng', i }); }
+  fireEngine(i) { this.fail.fire[i] = true; this.fail.fireT[i] = 0; this.event('fail', { what: 'fire', i }); }
+  failFcs(kind = 'transient') { this.fail.fcs = kind; this.event('fail', { what: 'fcs' }); }
+  failHyd(i) { this.fail.hyd[i] = true; this.event('fail', { what: 'hyd', i }); }
+  fcsReset() {
+    if (!this.fail.fcs) { this.msg('FCS reset: no fault', 2); return; }
+    if (this.fail.fcs === 'transient') { this.fail.fcs = false; this.msg('FCS reset: normal law restored', 3); this.event('fcsrestored'); }
+    else this.msg('FCS reset failed: fault persists, stay in DIRECT law and land', 3.5);
+  }
 
   updateSystems(dt, air, Vias) {
     // APU (GTDE-117): ~18 s to on-speed; auto shut-down once both engines are running
     const apu = this.apu;
     if (apu.state === 'starting') { apu.t += dt; apu.N = Math.min(1, apu.t / 18); if (apu.N >= 1) { apu.state = 'running'; this.msg('APU on speed', 2); } }
-    else if (apu.state === 'running') { apu.N = 1; if (this.engines.every(e => e.running())) { apu.state = 'off'; this.msg('APU auto shut-down', 2.5); } }
+    else if (apu.state === 'running') apu.N = 1;
     else apu.N = approach(apu.N, 0, dt / 6);
+    // battery: about 15 minutes on its own, recharged by the generators
+    const pw0 = this.power();
+    if (pw0 === 'bat') this.batCharge = Math.max(0, this.batCharge - dt / 900 - (apu.state === 'starting' ? dt / 300 : 0));
+    else if (pw0 === 'gen' && this.battery) this.batCharge = Math.min(1, this.batCharge + dt / 300);
+    // engine fire: extinguished a few seconds after the fuel is shut off, otherwise it spreads
+    for (let i = 0; i < 2; i++) {
+      if (!this.fail.fire[i]) continue;
+      this.fail.fireT[i] += dt;
+      if (!this.sw.eng[i] && this.engines[i].N < 0.5) { if ((this.fail.fireOffT[i] += dt) > 3) { this.fail.fire[i] = false; this.fail.fireOffT[i] = 0; this.msg('Fire out', 3); this.event('fireout', { i }); } }
+      else if (this.fail.fireT[i] > 45) { this.crash('Engine fire spread through the airframe'); return; }
+    }
+    // retractable refuelling probe (3 s), hydraulic
+    this.probe += clamp(this.probeCmd - this.probe, -dt / 3 * Math.max(this.hydraulics(), 0.1), dt / 3 * Math.max(this.hydraulics(), 0.1));
     // FBW built-in test once hydraulics and generators are up
     const hyd = this.hydraulics(), pw = this.power();
     if (!this.fbwReady) {
@@ -258,7 +332,7 @@ export class Aircraft {
     const ge = clamp(1 - hAGL / DATA.b, 0, 1);
     CL *= 1 + 0.12 * ge * ge;
     const cd0 = tab(CD0_MACH, M) + (this.stores ? 0.0065 : 0) + 0.024 * this.gear * (this.damage.gear ? 1.6 : 1) + 0.052 * this.airbrake
-      + 0.038 * flap + 0.0015 * this.hook + 0.012 * this.canopy + (this.canopyLost ? 0.018 : 0) + 0.004 * this.fold;
+      + 0.038 * flap + 0.0015 * this.hook + 0.012 * this.canopy + (this.canopyLost ? 0.018 : 0) + 0.004 * this.fold + 0.002 * this.probe;
     let K = tab(K_MACH, M);
     const hb = Math.max(hAGL, 0.5) / DATA.b * 16;
     K *= ge > 0 ? (hb * hb) / (1 + hb * hb) * 0.4 + 0.6 : 1;
@@ -293,8 +367,11 @@ export class Aircraft {
     const hyd = this.hydraulics();
     let dE, dA, dD, dR;
     const landing = this.gear > 0.5 && !onGround;
-    const direct = this.fbwMode === 'direct' || !this.fbwReady || this.power() === 'none' || this.power() === 'bat';
+    const direct = this.fbwMode === 'direct' || !this.fbwReady || !!this.fail.fcs || this.power() === 'none' || this.power() === 'bat';
     this.lawName = onGround ? 'GROUND' : direct ? 'DIRECT' : landing ? 'LANDING' : 'NORMAL';
+    // stick shaker: 3 degrees before the AoA limit of the active law (DIRECT has no limiter: warn from 20 degrees)
+    const aWarn = (direct ? 20 : (landing || this.flap > 0.5 ? 17 : 23)) * D2R;
+    this.shaker = !onGround && qbar > 400 ? clamp((a - aWarn) / (3 * D2R), 0, 1) : 0;
     // stick-free detection for flight-path hold
     this.stickFree = Math.abs(inp.pitch) < 0.03 ? this.stickFree + dt : 0;
     if (direct || qbar < 250 || onGround) {
@@ -384,6 +461,7 @@ export class Aircraft {
     const under = env.surface(this.pos.x, this.pos.z);
     const hAGL = under ? this.pos.y - 1.2 - under.h : 999;
     this.updateSystems(dt, !this.onGround, Vias);
+    if (this.crashed) return;
     this.fbwLaw(dt, { a, b: bta, M, V, qbar, p, q, r, theta, phi, gamma, onGround: this.onGround, hAGL });
     const cf = this.coeffs(a, bta, M, p, q, r, V, this.dE, this.dD, this.dA, this.dR, hAGL);
     const S = DATA.S;
@@ -442,9 +520,15 @@ export class Aircraft {
       const vL = pv.dot(rollDir), vLat = pv.dot(latDir);
       wh.spin = vL / wh.r;
       const brakeIn = wh.brake ? Math.max(this.inp.brake, this.parkBrake ? 1 : 0, this.holdback ? 1 : 0) : 0;
-      // anti-skid limits braking to ~0.45 mu; rolling resistance 0.02
-      const muRoll = 0.02 + 0.45 * brakeIn;
-      const fL = -Math.tanh(vL / 0.35) * muRoll * Nf;
+      // the parking brake bypasses anti-skid: rolling on it at speed locks and bursts the main tyres
+      if (wh.brake && this.parkBrake && !this.holdback && Math.abs(vL) > 22 && !this.tyresBurst) {
+        this.tyresBurst = true; this.msg('Tyres burst: rolling with the parking brake set!', 5); this.event('tyres', { pos: wp.clone() });
+        this.event('mistake', { what: 'Rolled with the parking brake set: main tyres burst' });
+      }
+      // anti-skid limits braking to ~0.45 mu; rolling resistance 0.02 (0.35 on burst tyres, rims dragging)
+      const muRoll = (wh.brake && this.tyresBurst ? 0.35 : 0.02) + 0.45 * brakeIn;
+      // a held brake grips statically: stiffer friction near zero slip, so a braked jet does not creep on a moving deck
+      const fL = -Math.tanh(vL / (brakeIn > 0.5 ? 0.04 : 0.35)) * muRoll * Nf;
       const fLat = -Math.tanh(vLat / 0.25) * wh.mu * Nf;
       const Fc = surf.n.clone().multiplyScalar(Nf).addScaledVector(rollDir, fL).addScaledVector(latDir, fLat);
       Fw.add(Fc);

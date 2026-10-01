@@ -1,0 +1,7 @@
+node_modules
+node_modules/
+__pycache__/
+tests/shots/
+*.pyc
+# film masters over GitHub's 100 MB limit stay local
+promo/out/*FULL HD*

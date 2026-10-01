@@ -14,7 +14,10 @@ function rnd(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 10139
 
 // ================================================================= SKY / SUN
 export function makeSky(scene, renderer, sunElev = 28, sunAz = 215) {
+  // sky brightness scale (the Sky shader keeps a twilight glow even with the sun well below the horizon)
+  const dimmable = m => { m.uniforms.skyK = { value: 1 }; m.fragmentShader = 'uniform float skyK;\n' + m.fragmentShader.replace('gl_FragColor = vec4( retColor, 1.0 );', 'gl_FragColor = vec4( retColor * skyK, 1.0 );'); };
   const sky = new Sky();
+  dimmable(sky.material);
   sky.scale.setScalar(450000);
   const u = sky.material.uniforms;
   u.turbidity.value = 3.2; u.rayleigh.value = 2.0; u.mieCoefficient.value = 0.003; u.mieDirectionalG.value = 0.82;
@@ -24,16 +27,56 @@ export function makeSky(scene, renderer, sunElev = 28, sunAz = 215) {
   // environment map from the sky (for PBR reflections)
   const pmrem = new THREE.PMREMGenerator(renderer);
   const envScene = new THREE.Scene();
-  const sky2 = new Sky(); sky2.scale.setScalar(1000);
+  const sky2 = new Sky(); dimmable(sky2.material); sky2.scale.setScalar(1000);
   for (const k in u) if (sky2.material.uniforms[k]) sky2.material.uniforms[k].value = u[k].value;
   envScene.add(sky2);
   // a dark 'sea' hemisphere so reflections below the horizon are water-coloured
   const seaHemi = new THREE.Mesh(new THREE.SphereGeometry(900, 32, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
     new THREE.MeshBasicMaterial({ color: 0x0b1e2a, side: THREE.BackSide }));
   envScene.add(seaHemi);
-  const env = pmrem.fromScene(envScene, 0.02).texture;
-  scene.environment = env;
-  return { sky, sun, env };
+  let envRT = pmrem.fromScene(envScene, 0.02);
+  scene.environment = envRT.texture;
+  // move the sun (or the moon, below the horizon the sky goes dark) and rebuild the reflection environment
+  const base = { turbidity: u.turbidity.value, rayleigh: u.rayleigh.value, mieCoefficient: u.mieCoefficient.value };
+  const setSun = (elev, az = sunAz, seaCol = 0x0b1e2a, look = {}) => {
+    const d = new THREE.Vector3().setFromSphericalCoords(1, (90 - elev) * D2R, az * D2R);
+    u.sunPosition.value.copy(d); sky2.material.uniforms.sunPosition.value.copy(d);
+    for (const k of Object.keys(base)) { const v = look[k] ?? base[k]; u[k].value = v; sky2.material.uniforms[k].value = v; }
+    u.skyK.value = sky2.material.uniforms.skyK.value = look.skyK ?? 1;
+    seaHemi.material.color.set(seaCol);
+    envRT.dispose(); envRT = pmrem.fromScene(envScene, 0.02); scene.environment = envRT.texture;
+    return d;
+  };
+  return { sky, sun, env: envRT.texture, setSun };
+}
+
+// ================================================================= NIGHT SKY
+export function makeStars(scene) {
+  const r = rnd(99), N = 2600, pos = [], col = [];
+  for (let i = 0; i < N; i++) {
+    const u = r() * 2 - 1, a = r() * Math.PI * 2, y = Math.abs(u) * 0.98 + 0.02, s = Math.sqrt(1 - y * y);
+    pos.push(Math.cos(a) * s * 90000, y * 90000, Math.sin(a) * s * 90000);
+    const b = 0.35 + 0.65 * Math.pow(r(), 3), t = r();
+    col.push(b * (0.85 + 0.15 * t), b * 0.9, b * (1.0 - 0.1 * t));
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  const stars = new THREE.Points(g, new THREE.PointsMaterial({ size: 1.7, sizeAttenuation: false, vertexColors: true, transparent: true, depthWrite: false, fog: false, toneMapped: false }));
+  stars.frustumCulled = false; stars.renderOrder = -1; stars.visible = false;
+  // the moon, low in the east
+  const mc = document.createElement('canvas'); mc.width = mc.height = 128; const mg = mc.getContext('2d');
+  const grd = mg.createRadialGradient(64, 64, 20, 64, 64, 64); grd.addColorStop(0, 'rgba(255,250,235,1)'); grd.addColorStop(0.42, 'rgba(240,236,220,1)'); grd.addColorStop(0.5, 'rgba(200,210,230,0.25)'); grd.addColorStop(1, 'rgba(200,210,230,0)');
+  mg.fillStyle = grd; mg.fillRect(0, 0, 128, 128);
+  const moon = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(mc), fog: false, toneMapped: false, depthWrite: false }));
+  moon.scale.setScalar(4200); moon.visible = false;
+  scene.add(stars, moon);
+  return { stars, moon };
+}
+export function dotTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
+  const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32); grd.addColorStop(0, 'rgba(255,255,255,1)'); grd.addColorStop(0.25, 'rgba(255,255,255,0.8)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
 }
 
 // ================================================================= SEA
@@ -43,6 +86,9 @@ export function makeWater(scene, sunDir, normalsTex) {
     textureWidth: 1024, textureHeight: 1024, waterNormals: normalsTex,
     sunDirection: sunDir.clone().normalize(), sunColor: 0xfff4e0, waterColor: 0x06202e, distortionScale: 3.2, fog: true,
   });
+  // ambient scale for the shader's constant grey reflection term, which would light the sea at night
+  const wm = water.material; wm.uniforms.ambientK = { value: 1 };
+  wm.fragmentShader = wm.fragmentShader.replace('uniform vec3 waterColor;', 'uniform vec3 waterColor;\nuniform float ambientK;').replace('vec3( 0.1 ) + reflectionSample * 0.9', 'vec3( 0.1 * ambientK ) + reflectionSample * 0.9');
   water.rotation.x = -Math.PI / 2;
   water.material.uniforms.size.value = 1.6;
   scene.add(water);
@@ -376,7 +422,7 @@ export class Carrier extends THREE.Group {
     const lx = tab(SHIP.xmin, la.y - ca * lensT) + 1.2;
     const lso = lsoTexture();
     this.lens = lso;
-    const lens = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 2.8), new THREE.MeshBasicMaterial({ map: lso.t, toneMapped: false }));
+    const lens = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 2.8), new THREE.MeshBasicMaterial({ map: lso.t, toneMapped: false })); lens.userData.selfLit = true;
     lens.position.set(lx, D + 2.6, la.y - ca * lensT); lens.rotation.y = 0.05;
     this.add(lens);
     box(1.8, 2.6, 0.8, lx, D + 1.3, la.y - ca * lensT - 0.45, dark);
@@ -388,9 +434,50 @@ export class Carrier extends THREE.Group {
     for (let z = -130; z <= 138; z += 12) for (const s of [0, 1]) {
       const m = new THREE.Mesh(lg, lm); m.position.set(s ? tab(SHIP.xmax, z) - 0.3 : tab(SHIP.xmin, z) + 0.3, SHIP.deckY + rampHeight(z).h + 0.1, z); this.add(m);
     }
+    this.makeNightLights();
     // wake
     this.add(this.makeWake());
     this.traverse(o => { if (o.isMesh && o !== deck) o.castShadow = true; });
+  }
+
+  // night recovery lighting: deck edge, landing-area edge and centreline lights, the vertical drop lights under the stern,
+  // red ramp lights, masthead / navigation lights and floodlights on the island (all glow points of constant pixel size)
+  makeNightLights() {
+    const P = [], C = [], S = [];
+    const add = (x, y, z, c, s = 1) => { P.push(x, y, z); C.push(...c); S.push(s); };
+    // deck lighting is deliberately dim (it must not dazzle pilots on night-vision-free approaches)
+    const W = [0.75, 0.7, 0.58], AMB = [0.8, 0.5, 0.12], RED = [1, 0.12, 0.08], GRN = [0.1, 1, 0.3], BLU = [0.2, 0.32, 0.6];
+    for (let z = -138; z <= 140; z += 6) { const h = SHIP.deckY + rampHeight(z).h + 0.15; add(tab(SHIP.xmin, z) + 0.3, h, z, BLU, 0.8); add(tab(SHIP.xmax, z) - 0.3, h, z, BLU, 0.8); }
+    const ca = Math.cos(SHIP.angle), sa = Math.sin(SHIP.angle), la = SHIP.landA;
+    const LX = t => la.x - sa * t, LZ = t => la.y - ca * t, D = SHIP.deckY + 0.08;
+    for (let t = 0; t <= 175; t += 8) { add(LX(t), D, LZ(t), W, 1.1); for (const off of [-11, 11]) add(LX(t) + off * ca, D, LZ(t) - off * sa, AMB, 0.9); }
+    for (let k = 0; k < 11; k++) add(LX(-1.5), SHIP.deckY - 0.8 - k * 1.15, SHIP.sternZ + 0.3, k < 2 ? RED : AMB, 1.3);   // drop lights
+    for (let x = tab(SHIP.xmin, SHIP.sternZ) + 1; x < tab(SHIP.xmax, SHIP.sternZ) - 1; x += 2) add(x, SHIP.deckY + 0.1, SHIP.sternZ - 0.2, RED, 0.9);
+    const I = SHIP.island;
+    add((I.x0 + I.x1) / 2 + 0.7, SHIP.deckY + 45, I.z0 + 15, W, 1.6); add((I.x0 + I.x1) / 2 + 0.7, SHIP.deckY + 40, I.z0 + 15, RED, 1.2);
+    add(I.x0 - 3, SHIP.deckY + 14, I.z0 + 7, RED, 1.4); add(I.x1 + 2, SHIP.deckY + 14, I.z0 + 7, GRN, 1.4);
+    add(0, SHIP.deckY - 4, SHIP.sternZ + 0.5, W, 1.4);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+    const pts = new THREE.Points(g, new THREE.PointsMaterial({ map: dotTexture(), size: 5, sizeAttenuation: false, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, fog: false }));
+    pts.frustumCulled = false;
+    const grp = new THREE.Group(); grp.add(pts);
+    // deck floodlights from the island, aimed at the landing area and the parking area
+    for (const [tx, tz] of [[LX(40), LZ(40)], [8, 60]]) {
+      const sl = new THREE.SpotLight(0xffe6c0, 0, 260, 0.55, 0.6, 1.2);
+      sl.position.set(I.x0 + 1, SHIP.deckY + 26, I.z1 - 6); sl.target.position.set(tx, SHIP.deckY, tz);
+      grp.add(sl, sl.target); (this.floods ||= []).push(sl);
+    }
+    grp.visible = false;
+    this.add(grp); this.nightGroup = grp;
+  }
+  setNight(k) {
+    if (!this.nightGroup) return;
+    this.nightGroup.visible = k > 0.05;
+    for (const f of this.floods || []) f.intensity = 160 * k;
+    // unlit decals (wake foam, painted pennant numbers) would glow in the dark: scale them with the ambient light
+    this.traverse(o => { if (o.isMesh && o.material && o.material.isMeshBasicMaterial && o.material.map && !o.userData.selfLit) {
+      o.userData.c0 ??= o.material.color.clone(); o.material.color.copy(o.userData.c0).multiplyScalar(1 - 0.975 * k); } });
   }
 
   makeWake() {

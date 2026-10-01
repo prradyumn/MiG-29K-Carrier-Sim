@@ -69,7 +69,9 @@ export class CarrierOps {
         this.sound.say('Roger ball', 'rogerball', 10, 'lso');
       }
       // wave-off criteria inside ~450 m
-      const dirty = ac.gear < 0.95 || ac.hook < 0.8;
+      // hook up is expected on a touch-and-go practice pass
+      // the LSO checks the hook is lowered (handle down); a hook already riding the deck edge is still down
+      const dirty = ac.gear < 0.95 || (!this.touchAndGo && !ac.hookCmd);
       if (!this.waveOff && lens.dist < 450 && (lens.err < -2.0 || Math.abs(lens.lineup) > 11 || dirty || aoa > 15 || aoa < 5.5)) {
         this.waveOff = true; this.call('Wave off! Wave off!', 'waveoff', 3); this.flash('WAVE OFF: full power, climb straight ahead', 4);
       }
