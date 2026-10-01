@@ -6,7 +6,7 @@ This file is the hand-off context for this project. It tells a new Claude sessio
 
 A browser flight simulator of the Indian Navy MiG-29K (INAS 303 "Black Panthers", side number 817) flying from a Vikramaditya-style carrier with a ski-jump. It runs on three.js r160. The aircraft model was built procedurally in headless Blender 4.2.
 
-The user's brief (Pradyumn): "very realistic", "as realistic as possible", with first- and third-person views. Environment: ocean plus carrier. The pacing is mission checkpoints. Later instructions: the opening, flying and landing should all behave like the real MiG-29K; then (September 2026) "a sense of realism and an actual teaching simulation", where the start feels like working the real controls. That round added the clickable cockpit, the instructor with 12 lessons, the debrief and replay, emergencies, the carrier circuit, night, the tanker and controller mapping.
+The user's brief (Pradyumn): "very realistic", "as realistic as possible", with first- and third-person views. Environment: ocean plus carrier. The pacing is mission checkpoints. Later instructions: the opening, flying and landing should all behave like the real MiG-29K; then (September 2026) "a sense of realism and an actual teaching simulation", where the start feels like working the real controls. That round added the clickable cockpit, the instructor with 12 lessons, the debrief and replay, emergencies, the carrier circuit, night, the tanker and controller mapping. The October 2026 graphics round (budget: about 100 MB for the whole game) added a detailed Blender carrier, a Gerstner ocean, a physically based sky, a post-processing stack with volumetric clouds, a cockpit and pilot detail pass, airframe weathering and new effects (see Rendering).
 
 - **Live version:** https://claude.ai/artifact/DTw8N2wUQ23GrYhJ1hVqJR (private artifact, version 2).
   - To update it, republish `sim/index.html` with the other files passed through `files`, and pass the URL above as `url`.
@@ -26,14 +26,18 @@ The user's brief (Pradyumn): "very realistic", "as realistic as possible", with 
 | `sim/tanker.js` | `Tanker`: buddy MiG-29K with the refuelling pod, Verlet hose, drogue, basket capture, push-in range, fuel transfer, hose break, pod lights. |
 | `sim/bindings.js` | `Bindings`: gamepad, joystick and HOTAS mapping (bind, invert, dead zone, curve, absolute throttle axis), saved in localStorage. |
 | `sim/flight.js` | The physics. `DATA` (aircraft data), `Engine` (RD-33MK), `Aircraft` (6-DOF body, systems, FBW laws, gear, hook, arrest, damage). |
-| `sim/world.js` | Sky, sea, clouds, and the procedural carrier. `SHIP` holds the deck geometry, wires and start spots. `Carrier` handles deck motion, `surfaceAt`, `wakeAt` (air wake behind the ship) and `updateLens` (landing light). |
+| `sim/world.js` | Sky (`makeSky`: single-scattering Rayleigh + Mie + ozone atmosphere, marched per pixel from the camera height, plus a PMREM environment from the same sky), sprite clouds (used only when the volumetric clouds are off), and the carrier. `SHIP` holds the deck geometry, wires and start spots. `Carrier` handles deck motion, `surfaceAt`, `wakeAt` (air wake behind the ship) and `updateLens` (landing light); `loadDetail()` swaps the procedural hull and island for `model/carrier/carrier.json` and gives the deck its textured, wettable material (`setWet`). |
+| `sim/ocean.js` | `Ocean`: 20 Gerstner waves on a camera-following polar grid, displaced in the vertex shader only where the grid can carry them; normals, crests and whitecaps per pixel with footprint anti-aliasing; unresolved wave slopes go into roughness (Toksvig), so the far sea becomes a glitter field rather than a mirror; wind slicks; light through the crests (subsurface tint); the carrier's wake (white water, turquoise bubble trail, Kelvin arms, bow wave). Visual only: the physics sea stays at y = 0. |
+| `sim/postfx.js` | `PostFX`: EffectComposer on an HDR MSAA target with a depth texture. `ScenePost` does AO (contact shading, fades out by 400 m), half-resolution volumetric clouds (1.5–3.2 km slab, 3D Worley/fbm noise), heat haze through the exhaust plumes, a sun flare, particles (drawn after the clouds, soft-depth-tested), then camera motion blur with per-object reprojection (own jet and tanker stay sharp) and depth of field in replays. Then bloom, tone mapping and a grade (vignette, chromatic edge, grain). `setQuality()` per preset. |
+| `sim/cockpitdetail.js` | Attaches `model/cockpit_detail.json` (K-36D-3.5 seat, tub frames and looms, canopy sills, fasteners, MFD rockers, glareshield roll, mirror housings, detailed pilot `Pilot2`), retires the airframe's simple seat and pilot, and gives the cockpit paint a triplanar crinkle finish. |
+| `sim/aircraftdetail.js` | `AircraftDetail`: shader-side weathering on the skin (seam grime from the baked AO, salt streaks, exhaust soot, paint grain and scratches, wet skin on a wet deck) and heat-tinted nozzle petals. |
 | `sim/ops.js` | `CarrierOps`: wire engagement, LSO voice calls, wave-off, bolter and hook-skip detection, grading. |
 | `sim/hud.js` | Conformal HUD drawn in a 2D canvas and clipped to the combiner glass, plus the MFI-10-7 display canvases (boot test, engine page). |
 | `sim/audio.js` | WebAudio sound synthesis (engines, APU, afterburner, wind, rolling, AoA tone, switch clicks) and speechSynthesis voice warnings, LSO and instructor calls. |
-| `sim/effects.js` | Sprite effects: tyre smoke, hook sparks, wingtip vortices, contrails, transonic vapour cone, deck exhaust haze. |
-| `sim/model/` | `mig29k.json` (the aircraft, 7.8 MB), `tex/` (4K PBR maps: `tex_SkinA/B_{base,orm,normal}.jpg`), `controls.json` (cockpit controls, 0.6 MB) and `upaz.json` (refuelling pod and drogue, 0.2 MB). |
+| `sim/effects.js` | Particles as two instanced billboard meshes (alpha and additive) in their own scene `fxScene`, with a 4-tile atlas (puff, smoke, spray, flame), gravity and drag: tyre smoke, hook sparks, wingtip vortices, contrails, transonic vapour cone, deck exhaust haze, the island funnel exhaust, bow spray in a heavy sea, the rooster tail of a jet below ~20 m over water, a ditching splash (`splash`), engine-fire flames and smoke, and a burning wreck (`burn`). |
+| `sim/model/` | `mig29k.json` (the aircraft, 7.8 MB), `tex/` (4K PBR maps: `tex_SkinA/B_{base,orm,normal}.jpg`), `controls.json` (cockpit controls, 0.6 MB), `cockpit_detail.json` (seat, tub, pilot, 1.3 MB), `upaz.json` (refuelling pod and drogue, 0.2 MB) and `carrier/` (the Blender carrier `carrier.json` plus deck, hull and paint textures, 3.7 MB). The whole `sim/` is about 22 MB. |
 | `blender/mig29k_indian_navy.blend` | The finished Blender model, textures packed. Every part is a separate object; moving parts pivot on their hinge lines. |
-| `blender/cockpit_controls.blend`, `blender/upaz_refuel_pod.blend` | Sources for `controls.json` and `upaz.json`. |
+| `blender/cockpit_controls.blend`, `blender/upaz_refuel_pod.blend`, `blender/carrier_vikramaditya.blend` | Sources for `controls.json`, `upaz.json` and `carrier/carrier.json`. |
 | `blender/scripts/` | The build pipeline that generated the model (see below). |
 | `tests/` | Node physics harness `ftest.mjs`, systems tests `systems.mjs`, Playwright step harness `run.py`, lesson tests `lessons.py` (scripted student), approach autopilot `ap.js`. |
 | `renders/` | Blender renders and in-sim screenshots from development. |
@@ -46,7 +50,7 @@ The user's brief (Pradyumn): "very realistic", "as realistic as possible", with 
 - `.vscode/settings.json` sets Live Server to serve `/sim` (http://127.0.0.1:5501/) and to ignore `promo/`, `blender/`, `tests/`, `renders/`, zips, `.blend` and logs.
 - Live Server reloads the page when any watched file changes, so film renders or test captures written elsewhere in the workspace used to reload the sim mid-mission. Keep that ignore list if you add new output folders.
 - `?capture` mode stops the real-time loop. A recorder then steps frames with `__sim.renderStep(dt)`, and a shot script can take the camera with `window.__camHook`. `promo/scripts/shots.js` uses this.
-- `tests/stability.py` plays every mission and some lessons in real time with keyboard input, in GPU Chrome. It flags reloads, resets, errors, crashes and heap growth. Last run: none, at 46–56 fps.
+- `tests/stability.py` plays every mission and some lessons in real time with keyboard input, in GPU Chrome. It flags reloads, resets, errors, crashes and heap growth. Last run (1 Oct 2026, after the graphics round): none, at 54–61 fps.
 
 ## Conventions (important)
 
@@ -145,12 +149,14 @@ Run: `cd tests && npm i three@0.160.0 && node ftest.mjs <launch [short] | level 
 
 The browser tests use headless Playwright with SwiftShader. Environment on this Mac: `~/.venvs/migsim` (Python 3.11 from `uv`, with `bpy==4.2.0`, `playwright` and chromium).
 - `run.py` takes a JSON list of steps such as `["click", sel]`, `["press", key]`, `["eval", js]` or `["shot", path]`.
-- `lessons.py <id,id|all> [shots]` runs lessons with a scripted student that follows the instructor. It clicks the highlighted controls through `cockpit.click`, uses `ap.js` for approaches and adds its own circuit and formation flying. It also makes a real mouse click on the battery guard. All 12 lessons complete with a calm sea. SwiftShader frames take seconds, so drive time with `window.__sim.tick()` rather than wall-clock time, and wait for `state.lookTarget` to clear before aiming real mouse clicks.
+- `lessons.py <id,id|all> [shots]` runs lessons with a scripted student that follows the instructor. It clicks the highlighted controls through `cockpit.click`, uses `ap.js` for approaches and adds its own circuit and formation flying. It also makes a real mouse click on the battery guard. With a calm sea, 10 of 12 lessons complete (most at 3 stars). Since commit 8b8a02c the scripted student fails `circuit` (bolters, then ditches) and `tanker` (closes too fast and hits the tanker), identically on GPU and SwiftShader and on that commit's own code, so it is the test autopilot, not this round's rendering changes; `ap.js` / `__circuit` and the formation logic need retuning. SwiftShader frames take seconds, so drive time with `window.__sim.tick()` rather than wall-clock time, and wait for `state.lookTarget` to clear before aiming real mouse clicks.
 
 ## Blender pipeline (`blender/scripts/`)
 
 - **Environment:** run with the pip `bpy==4.2.0` module (Python 3.11; `~/.venvs/migsim/bin/python` here); headless is fine. The original airframe scripts use absolute paths `/home/claude/mig/...` from the cloud session, so change `sys.path` and the `out/` paths to run them locally. The newer scripts (`controls.py`, `upaz.py`, `embed_gltf.py`) run from anywhere.
 - **`controls.py <out_dir>`:** builds the interactive cockpit controls (panels, toggles, guards, gear lever, T-handles, gauge and caution faces, pedals, gloved hands) in the cockpit's own coordinates, then exports `controls.gltf` and `controls.blend`. `python embed_gltf.py <out>/controls.gltf sim/model/controls.json` embeds it.
+- **`carrier_textures.py` then `carrier.py <out_dir>`:** the textures (deck macro map with markings, rubber and scorch; deck grit; hull with boot-top, portholes, rust and R33; paint) and the carrier itself in ship-local coordinates (`B(x, y, z) = (x, −z, y)`): hull with sponsons and transom, island with prifly, phased-array tower, mast, lattice, radars (`Radar_Rot` spins), doors, windows (`IslandWindows`, lit at night), CIWS, VLS, boats, LSO platform, deck vehicles and crew. Merged by material; embed to `sim/model/carrier/carrier.json`. Note `bake()` must use `matrix_basis` (matrix_world is stale before a depsgraph update).
+- **`cockpit_detail.py <out_dir>`:** the cockpit detail and pilot (see `cockpitdetail.js`), embedded to `sim/model/cockpit_detail.json`.
 - **`upaz.py <out_dir>`:** builds the buddy refuelling pod (ram-air turbine, signal lights) and the drogue basket; embed it to `sim/model/upaz.json` the same way.
 - **`lib.py`:** geometry helpers (`loft`, `superellipse_ring`, `surface_panel`, `lathe`, `set_pivot_frame`, and others).
 - **`build_airframe.py`:** fuselage, wings, tails and canopy from section tables (`FUS`, `BODY`, `NAC`, `BOOM`, `CAN`).
@@ -164,12 +170,23 @@ The browser tests use headless Playwright with SwiftShader. Environment on this 
   6. `export_gltf.py` writes `sim/model/mig29k.gltf`; convert it to a single JSON with the buffer base64-embedded.
 - **`hero.py`:** Cycles renders on a deck and ocean scene.
 
+## Rendering (October 2026)
+
+- **Pipeline:** `scene` → [AO, volumetric clouds, heat haze, flare, particles] → [motion blur, DOF] → bloom (threshold relative to exposure) → ACES tone mapping → grade. Materials render linear HDR into the composer; Low draws straight to the screen (sky and particles include their own tone mapping for that path).
+- **Quality presets** (Settings): Ultra (shadows 4096, AO, motion blur, clouds), High (2048), Medium (no AO / motion blur), Low (no post stack, sprite clouds). Measured at 1080p in headless GPU Chrome on this Mac: deck cockpit view 50 / 43–53 / 57 / 72 fps, approach chase 76 / 73 / 72 / 118 fps. The sky costs about 0.5 ms; the deck scene's geometry and shadows dominate.
+- **Haze lives low:** fog density is divided by (1 + camera height / 1500 m), so the sea stays blue from altitude.
+- **Particles must not go in the main scene:** the cloud and aerial-fog pass reconstructs position from depth, and anything that does not write depth is treated as distant background and fogged out. Effects live in `fx.fxScene`, drawn by `ScenePost` after the clouds.
+- **Custom ShaderMaterials** need the `logdepthbuf` chunks (the renderer uses a logarithmic depth buffer).
+- **Asset compression** (meshopt / KTX2) was not needed at 22 MB and would risk the name-based node lookups; revisit if the size grows.
+- Look-test tool used during development: render views in capture mode with `__sim.renderStep()` and `window.__camHook`, in GPU Chrome (`channel='chrome', args=['--use-angle=metal']`).
+
 ## Known limitations and ideas for next steps
 
-- The carrier is procedural and fairly plain (a box-like island, no deck crew, no catapult shuttle; Vikramaditya has none anyway).
+- The carrier model is detailed but not survey-accurate; deck crew are static figures.
+- The ocean is visual only (the jet ditches at y = 0, the ship's motion is its own model); no screen-space reflections of the ship in the water.
 - Over-nose view is about 12°, so the deck slides under the HUD in the last ~300 m.
 - There is one throttle for both engines, so single-engine drills use the engine masters.
-- No weapons, radar modes or damage visuals.
+- No weapons or radar modes. Damage visuals are limited to fire, smoke and splash effects.
 - The original merged random switch fields on the consoles are still decorative; only the new panels are live.
 - Possible upgrades:
   - bake the cockpit tweaks into the model;

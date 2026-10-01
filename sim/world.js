@@ -1,7 +1,7 @@
 // Environment: sky, sea, clouds and an INS Vikramaditya-style STOBAR carrier (procedural).
 import * as THREE from 'three';
-import { Sky } from 'three/addons/objects/Sky.js';
 import { Water } from 'three/addons/objects/Water.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const D2R = Math.PI / 180;
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
@@ -13,41 +13,111 @@ function tab(t, x) {
 function rnd(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
 
 // ================================================================= SKY / SUN
+// Physically based sky: single scattering through a spherical Rayleigh + Mie atmosphere (8 km / 1.2 km scale
+// heights), marched per pixel with the sun's transmittance marched to each sample. Gives a deep blue zenith, a pale
+// hazy horizon, a sun disk reddened by the path length, correct sunsets, and a darker sky at altitude (the march
+// starts at the camera height). Output is scene-linear HDR; the composer's tone mapping brings it to display range.
+const ATMOS_VERT = `
+  varying vec3 vDir;
+  void main() { vDir = position; vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position = p.xyww; }`;
+const ATMOS_FRAG = `
+  uniform vec3 sunPosition, uSea; uniform float rayleigh, turbidity, mieDirectionalG, skyK, uAlt, uSunI;
+  varying vec3 vDir;
+  #define PI 3.14159265
+  const float RE = 6371.0, HA = 100.0;                                   // km: earth radius, atmosphere depth
+  const vec3 KR = vec3(5.8e-3, 13.5e-3, 33.1e-3);                        // Rayleigh scattering per km at sea level
+  const float KM = 21e-3, HR = 8.0, HM = 1.2;
+  const vec3 KO = vec3(0.650e-3, 1.881e-3, 0.085e-3);                     // ozone absorption (keeps the twilight zenith blue)
+  float ozone(float h) { return max(0.0, 1.0 - abs(h - 25.0) / 15.0); }
+  // distance along d from a point at height h (r0 = point) to the top of the atmosphere; stable at small heights
+  float toTop(vec3 r0, float h, vec3 d) { float b = dot(r0, d), c = (h - HA) * (2.0 * RE + h + HA); return -b + sqrt(max(b * b - c, 0.0)); }
+  void main() {
+    vec3 d = normalize(vDir), s = normalize(sunPosition);
+    float h0 = max(uAlt, 0.0005); vec3 r0 = vec3(0.0, RE + h0, 0.0);
+    float b = r0.y * d.y, cg = h0 * (2.0 * RE + h0), disc = b * b - cg;
+    bool ground = d.y < 0.0 && disc > 0.0;
+    float tEnd = ground ? (-b - sqrt(disc)) : toTop(r0, h0, d);
+    vec3 kr = KR * rayleigh; float km = KM * turbidity;
+    float mu = dot(d, s), g = mieDirectionalG, gg = g * g;
+    float pR = 3.0 / (16.0 * PI) * (1.0 + mu * mu);
+    float pM = 3.0 / (8.0 * PI) * ((1.0 - gg) * (1.0 + mu * mu)) / (pow(1.0 + gg - 2.0 * mu * g, 1.5) * (2.0 + gg));
+    // samples crowd towards the camera (quadratic spacing): horizontal rays spend most of their air in the first km
+    float odR = 0.0, odM = 0.0, odO = 0.0; vec3 sumR = vec3(0.0), sumM = vec3(0.0);
+    for (int i = 0; i < I_STEPS; i++) {
+      float x0 = float(i) / float(I_STEPS), x1 = float(i + 1) / float(I_STEPS), dt = tEnd * (x1 * x1 - x0 * x0);
+      vec3 p = r0 + d * (tEnd * (x0 + x1) * (x0 + x1) * 0.25); float h = max(length(p) - RE, 0.0);
+      float dR = exp(-h / HR) * dt, dM = exp(-h / HM) * dt, dO = ozone(h) * dt; odR += dR * 0.5; odM += dM * 0.5; odO += dO * 0.5;
+      // the sun's light reaching this sample (none once the sun is below the local horizon)
+      float sb = dot(p, s);
+      if (sb < 0.0 && sb * sb - h * (2.0 * RE + h) > 0.0) { odR += dR * 0.5; odM += dM * 0.5; odO += dO * 0.5; continue; }
+      float ts = toTop(p, h, s), lR = 0.0, lM = 0.0, lO = 0.0;
+      for (int j = 0; j < J_STEPS; j++) {
+        float y0 = float(j) / float(J_STEPS), y1 = float(j + 1) / float(J_STEPS), ds = ts * (y1 * y1 - y0 * y0);
+        float hj = max(length(p + s * (ts * (y0 + y1) * (y0 + y1) * 0.25)) - RE, 0.0); lR += exp(-hj / HR) * ds; lM += exp(-hj / HM) * ds; lO += ozone(hj) * ds; }
+      vec3 att = exp(-(kr * (odR + lR) + km * 1.1 * (odM + lM) + KO * (odO + lO)));
+      sumR += dR * att; sumM += dM * att;
+      odR += dR * 0.5; odM += dM * 0.5; odO += dO * 0.5;
+    }
+    vec3 col = uSunI * (pR * kr * sumR + pM * km * sumM);
+    vec3 trans = exp(-(kr * odR + km * 1.1 * odM + KO * odO));
+    if (ground) {
+      // the sea beyond the rendered ocean (seen from altitude): dim water colour lit by the sky, behind the haze
+      col += uSea * trans * uSunI * (0.02 + 0.05 * max(s.y, 0.0));
+    } else {
+      // the sun's disk (0.3 deg) with a soft limb, reddened by the air in front of it
+      float sd = smoothstep(0.999955, 0.999985, mu);
+      col += uSunI * 14.0 * trans * sd;
+    }
+    // a faint airglow so a moonless night is not pure black near the horizon
+    col += vec3(0.00025, 0.0004, 0.0008) * (1.0 - abs(d.y));
+    gl_FragColor = vec4(col * skyK, 1.0);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }`;
+function makeAtmosphere(steps = [24, 6]) {
+  const m = new THREE.ShaderMaterial({
+    uniforms: { sunPosition: { value: new THREE.Vector3(0, 1, 0) }, uSea: { value: new THREE.Color(0x0b1e2a) }, rayleigh: { value: 1 }, turbidity: { value: 1 },
+      mieDirectionalG: { value: 0.8 }, skyK: { value: 1 }, uAlt: { value: 0 }, uSunI: { value: 22 } },
+    defines: { I_STEPS: steps[0], J_STEPS: steps[1] }, vertexShader: ATMOS_VERT, fragmentShader: ATMOS_FRAG,
+    side: THREE.BackSide, depthWrite: false, fog: false,
+  });
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 24), m);
+  mesh.frustumCulled = false; mesh.renderOrder = -10;
+  return mesh;
+}
 export function makeSky(scene, renderer, sunElev = 28, sunAz = 215) {
-  // sky brightness scale (the Sky shader keeps a twilight glow even with the sun well below the horizon)
-  const dimmable = m => { m.uniforms.skyK = { value: 1 }; m.fragmentShader = 'uniform float skyK;\n' + m.fragmentShader.replace('gl_FragColor = vec4( retColor, 1.0 );', 'gl_FragColor = vec4( retColor * skyK, 1.0 );'); };
-  const sky = new Sky();
-  dimmable(sky.material);
-  sky.scale.setScalar(450000);
+  const sky = makeAtmosphere();
+  sky.scale.setScalar(1000);
   const u = sky.material.uniforms;
-  u.turbidity.value = 3.2; u.rayleigh.value = 2.0; u.mieCoefficient.value = 0.003; u.mieDirectionalG.value = 0.82;
+  // follow the camera; the march starts at its height (km)
+  sky.onBeforeRender = (r, s, cam) => { sky.position.copy(cam.position); u.uAlt.value = Math.max(0, cam.position.y) / 1000; };
   const sun = new THREE.Vector3().setFromSphericalCoords(1, (90 - sunElev) * D2R, sunAz * D2R);
   u.sunPosition.value.copy(sun);
   scene.add(sky);
-  // environment map from the sky (for PBR reflections)
+  // environment map from the same sky at sea level, for PBR reflections
   const pmrem = new THREE.PMREMGenerator(renderer);
   const envScene = new THREE.Scene();
-  const sky2 = new Sky(); dimmable(sky2.material); sky2.scale.setScalar(1000);
-  for (const k in u) if (sky2.material.uniforms[k]) sky2.material.uniforms[k].value = u[k].value;
-  envScene.add(sky2);
+  const sky2 = makeAtmosphere([12, 4]); sky2.scale.setScalar(50); envScene.add(sky2);
+  const u2 = sky2.material.uniforms;
   // a dark 'sea' hemisphere so reflections below the horizon are water-coloured
-  const seaHemi = new THREE.Mesh(new THREE.SphereGeometry(900, 32, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
+  const seaHemi = new THREE.Mesh(new THREE.SphereGeometry(60, 32, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
     new THREE.MeshBasicMaterial({ color: 0x0b1e2a, side: THREE.BackSide }));
   envScene.add(seaHemi);
-  let envRT = pmrem.fromScene(envScene, 0.02);
+  const bake = () => pmrem.fromScene(envScene, 0.02, 0.1, 200);
+  let envRT = bake();
   scene.environment = envRT.texture;
   // move the sun (or the moon, below the horizon the sky goes dark) and rebuild the reflection environment
-  const base = { turbidity: u.turbidity.value, rayleigh: u.rayleigh.value, mieCoefficient: u.mieCoefficient.value };
+  const base = { rayleigh: 1, turbidity: 1, mieDirectionalG: 0.8, skyK: 1 };
   const setSun = (elev, az = sunAz, seaCol = 0x0b1e2a, look = {}) => {
     const d = new THREE.Vector3().setFromSphericalCoords(1, (90 - elev) * D2R, az * D2R);
-    u.sunPosition.value.copy(d); sky2.material.uniforms.sunPosition.value.copy(d);
-    for (const k of Object.keys(base)) { const v = look[k] ?? base[k]; u[k].value = v; sky2.material.uniforms[k].value = v; }
-    u.skyK.value = sky2.material.uniforms.skyK.value = look.skyK ?? 1;
+    u.sunPosition.value.copy(d); u2.sunPosition.value.copy(d);
+    for (const k of Object.keys(base)) u[k].value = u2[k].value = look[k] ?? base[k];
+    u.uSea.value.set(seaCol); u2.uSea.value.set(seaCol);
     seaHemi.material.color.set(seaCol);
-    envRT.dispose(); envRT = pmrem.fromScene(envScene, 0.02); scene.environment = envRT.texture;
+    envRT.dispose(); envRT = bake(); scene.environment = envRT.texture;
     return d;
   };
-  return { sky, sun, env: envRT.texture, setSun };
+  return { sky, sun, get env() { return envRT.texture; }, setSun };
 }
 
 // ================================================================= NIGHT SKY
@@ -274,7 +344,8 @@ export class Carrier extends THREE.Group {
     dg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     dg.setIndex(idx); dg.computeVertexNormals();
     const deck = new THREE.Mesh(dg, deckMat); deck.receiveShadow = true; deck.name = 'deck';
-    this.add(deck);
+    this.add(deck); this.deck = deck;
+    const proc0 = this.children.length;      // everything from here to the wires is the low-detail ship, replaced by the Blender model
     // deck edge walls (from edge down to 16.5 m) + ramp side skirts
     const wall = [], widx = [];
     const addWall = (side) => {
@@ -391,6 +462,7 @@ export class Carrier extends THREE.Group {
     const pn = new THREE.Mesh(new THREE.PlaneGeometry(9, 4.5), new THREE.MeshBasicMaterial({ map: pt2, transparent: true, fog: true }));
     pn.position.set(I.x0 - 0.06, D + 9.8, cz + 6); pn.rotation.y = -Math.PI / 2; this.add(pn);
     // ---- arresting wires & jet blast deflectors
+    this.procParts = this.children.slice(proc0);
     const ca = Math.cos(SHIP.angle), sa = Math.sin(SHIP.angle);
     const la = SHIP.landA;
     this.wires = [];
@@ -413,7 +485,9 @@ export class Carrier extends THREE.Group {
     }
     // deck tractors / equipment
     const yel = new THREE.MeshStandardMaterial({ color: 0xc9a227, roughness: 0.7 });
+    const t0 = this.children.length;
     for (const [x, z] of [[19.5, 38], [20, 128], [-26, 30]]) box(2.2, 1.4, 4.2, x, D + 0.7, z, yel);
+    this.procParts.push(...this.children.slice(t0));
     // optical landing system (lens) on the port sponson
     const tl = SHIP.wires[1] - 5;                 // hook touchdown target: 5 m short of wire 2, the target wire
     // the lens is set for the MiG-29K hook-to-eye geometry at on-speed AoA: eye 4.3 m above and 10.5 m ahead of the hook tip
@@ -436,9 +510,40 @@ export class Carrier extends THREE.Group {
     }
     this.makeNightLights();
     // wake
-    this.add(this.makeWake());
+    // flat wake decals are kept for the low-detail sea only: the ocean shader draws the real wake as foam
+    this.wakeMesh = this.makeWake(); this.wakeMesh.visible = false; this.add(this.wakeMesh);
     this.traverse(o => { if (o.isMesh && o !== deck) o.castShadow = true; });
   }
+
+  // the detailed Blender carrier (hull, island, mast, catwalks, weapons, vehicles, deck crew) and the painted deck.
+  // Until it loads (or if it fails) the procedural ship stays visible.
+  loadDetail(renderer) {
+    const aniso = Math.min(16, renderer.capabilities.getMaxAnisotropy());
+    const tl = new THREE.TextureLoader();
+    const tex = (f, srgb, rep) => { const t = tl.load('model/carrier/' + f); t.anisotropy = aniso; t.flipY = false; if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+      if (rep) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep[0], rep[1]); } return t; };
+    // deck: painted 2048x8192 sheet (markings, rubber, scorch) plus a tiling non-skid grit (every 2 m) for close-up detail
+    const macro = tex('deck_macro.jpg', true), grit = tex('deck_grit.jpg', false, [34, 145]), gritN = tex('deck_grit_n.jpg', false, [34, 145]);
+    const dm = new THREE.MeshStandardMaterial({ map: macro, roughnessMap: grit, roughness: 1.0, metalness: 0.05, normalMap: gritN, normalScale: new THREE.Vector2(0.55, 0.55) });
+    dm.onBeforeCompile = sh => {
+      sh.uniforms.gritMap = { value: grit }; sh.uniforms.wet = { value: 0 }; dm.userData.sh = sh;
+      sh.fragmentShader = 'uniform sampler2D gritMap;\nuniform float wet;\n' + sh.fragmentShader
+        .replace('#include <map_fragment>', '#include <map_fragment>\n  float g = texture2D(gritMap, vRoughnessMapUv).r; diffuseColor.rgb *= mix(0.78, 1.12, g) * (1.0 - 0.28 * wet);')
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n  roughnessFactor = mix(0.72 + 0.25 * g, 0.18 + 0.2 * g, wet);');
+    };
+    this.deck.material = dm; this.deckMat = dm;
+    return new Promise(res => new GLTFLoader().load('model/carrier/carrier.json', g => {
+      const s = g.scene;
+      s.traverse(o => { if (!o.isMesh) return; o.castShadow = true; o.receiveShadow = true;
+        for (const k of ['map', 'normalMap']) if (o.material[k]) o.material[k].anisotropy = aniso;
+        if (o.material.name === 'IslandWindows') { this.windowMats = (this.windowMats || []).concat(o.material); o.material.emissive = new THREE.Color(0xffd9a0); o.material.emissiveIntensity = 0; } });
+      this.add(s); this.detail = s;
+      for (const p of this.procParts) p.visible = false;
+      const r = s.getObjectByName('Radar_Rot'); if (r) this.radar = r;
+      res(true);
+    }, undefined, e => { console.warn('carrier model', e); res(false); }));
+  }
+  setWet(k) { if (this.deckMat?.userData.sh) this.deckMat.userData.sh.uniforms.wet.value = k; }
 
   // night recovery lighting: deck edge, landing-area edge and centreline lights, the vertical drop lights under the stern,
   // red ramp lights, masthead / navigation lights and floodlights on the island (all glow points of constant pixel size)
@@ -475,6 +580,7 @@ export class Carrier extends THREE.Group {
     if (!this.nightGroup) return;
     this.nightGroup.visible = k > 0.05;
     for (const f of this.floods || []) f.intensity = 160 * k;
+    for (const m of this.windowMats || []) m.emissiveIntensity = 0.9 * k;     // lit bridge and flyco windows
     // unlit decals (wake foam, painted pennant numbers) would glow in the dark: scale them with the ambient light
     this.traverse(o => { if (o.isMesh && o.material && o.material.isMeshBasicMaterial && o.material.map && !o.userData.selfLit) {
       o.userData.c0 ??= o.material.color.clone(); o.material.color.copy(o.userData.c0).multiplyScalar(1 - 0.975 * k); } });

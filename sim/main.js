@@ -1,7 +1,11 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Aircraft, DATA } from './flight.js';
-import { makeSky, makeWater, makeClouds, makeStars, Carrier, SHIP } from './world.js';
+import { makeSky, makeClouds, makeStars, Carrier, SHIP } from './world.js';
+import { Ocean } from './ocean.js';
+import { PostFX } from './postfx.js';
+import { loadCockpitDetail } from './cockpitdetail.js';
+import { AircraftDetail } from './aircraftdetail.js';
 import { HUD, Displays } from './hud.js';
 import { Sound } from './audio.js';
 import { Effects } from './effects.js';
@@ -48,12 +52,17 @@ const hemiLight = new THREE.HemisphereLight(0xbcd3ea, 0x1d2c36, 0.55);
 scene.add(hemiLight);
 
 const texLoader = new THREE.TextureLoader();
-const water = makeWater(scene, sun, texLoader.load('assets/waternormals.jpg'));
+const water = new Ocean(texLoader.load('assets/waternormals.jpg'));
+scene.add(water);
 const clouds = makeClouds(scene);
+const postfx = new PostFX(renderer, scene, camera);
+const acDetail = new AircraftDetail();
 const night = makeStars(scene);
 const ship = new Carrier({ speed: 12 });
 scene.add(ship);
+ship.loadDetail(renderer);
 const fx = new Effects(scene);
+postfx.setEffects(fx);
 const WIND = V3(0, 0, 7);               // natural wind from the north, 7 m/s
 
 // ------------------------------------------------------------------ settings
@@ -126,7 +135,7 @@ const TOD = {
   day: { el: SUN_EL, az: SUN_AZ, light: [0xfff1dc, 3.4], hemi: [0xbcd3ea, 0x1d2c36, 0.55], exp: 0.62, fog: [0xa3bbd0, 0.000032], sea: 0x06202e, sunCol: 1, night: 0, cloud: 1 },
   dusk: { el: 2.5, az: 262, light: [0xffa35c, 1.7], hemi: [0x8a8fb5, 0x1a1a24, 0.32], exp: 0.78, fog: [0x8c7f86, 0.000038], sea: 0x0a1822, sunCol: 0.8, night: 0.6, cloud: 0.62, lightEl: 6 },
   night: { el: -24, az: 262, light: [0x9fb4ff, 0.32], hemi: [0x1c2638, 0x020304, 0.10], exp: 0.95, fog: [0x04070c, 0.000028], sea: 0x01060a, sunCol: 0.018, night: 1, cloud: 0.022, lightEl: 28, lightAz: 115,
-    sky: { rayleigh: 0.35, turbidity: 1.2, mieCoefficient: 0.0006, skyK: 0.1 }, seaK: 0.06 },
+    sky: { skyK: 1 }, seaK: 0.06 },
 };
 let tod = TOD.day;
 function applyTimeOfDay(mode) {
@@ -136,10 +145,13 @@ function applyTimeOfDay(mode) {
   const le = T.lightEl ?? T.el, la = T.lightAz ?? T.az;
   sun.setFromSphericalCoords(1, (90 - le) * D2R, la * D2R);
   sunLight.color.set(T.light[0]); sunLight.intensity = T.light[1];
+  water.u.uSunDir.value.copy(sun); water.u.uSunCol.value.copy(sunLight.color).multiplyScalar(sunLight.intensity * (T.night > 0.9 ? 0.2 : 1));
   hemiLight.color.set(T.hemi[0]); hemiLight.groundColor.set(T.hemi[1]); hemiLight.intensity = T.hemi[2];
   renderer.toneMappingExposure = T.exp;
   scene.fog.color.set(T.fog[0]); scene.fog.density = T.fog[1];
-  const U = water.material.uniforms; U.sunDirection.value.copy(sun); U.waterColor.value.set(T.sea); U.ambientK.value = T.seaK ?? (T.night > 0.3 ? 0.55 : 1);
+  fx.setLight(T.night > 0.9 ? 0.05 : T.night > 0.3 ? 0.5 : 1);
+  water.u.uDeep.value.set(T.night > 0.9 ? 0x00060b : T.night > 0.3 ? 0x041018 : 0x02101a); water.u.uShallow.value.set(T.night > 0.9 ? 0x02141a : T.night > 0.3 ? 0x0b3038 : 0x0e4a5a);
+  water.u.uFoamK.value = T.night > 0.9 ? 0.35 : 1;
   night.stars.visible = T.night > 0.9; night.moon.visible = T.night > 0.9;
   ship.setNight(T.night);
   cockpit.backlight = T.night;
@@ -214,11 +226,18 @@ function setupModel(gltf) {
   if (nodes.Gear_Nose) { nodes.Gear_Nose.add(aoaLight); aoaLight.position.copy(nodes.Gear_Nose.worldToLocal(V3(0, -0.95, st2z(5.93)))); }
   fx.attach(model);
   scene.add(model);
+  postfx.setMovers([{ obj: model, r: 11 }, { obj: tanker.group, r: 26 }]);
+  acDetail.apply(model);
   // seat harness hangs in mid-air without the pilot figure: hide it from the cockpit view with the pilot
   model.traverse(o => { if (/^Seat_strap/.test(o.name)) pilotNodes.push(o); });
   model.updateMatrixWorld(true);
   tanker.load(model).catch(e => console.warn('tanker', e));
-  cockpit.load(model, nodes).then(() => { cockpitReady = true; }).catch(e => console.warn('cockpit controls', e));
+  Promise.all([cockpit.load(model, nodes), loadCockpitDetail(model, nodes).catch(e => console.warn('cockpit detail', e))])
+    .then(() => {
+      // the detailed pilot replaces the airframe's simple figure (both are hidden in first person)
+      if (nodes.Pilot2) { const old = p => /^Pilot($|_)/.test(p.name); for (const p of pilotNodes) if (old(p)) p.visible = false; pilotNodes = pilotNodes.filter(p => !old(p)); pilotNodes.push(nodes.Pilot2); }
+      cockpitReady = true;
+    }).catch(e => console.warn('cockpit controls', e));
   // glow halos for the navigation lights (red port, green starboard, white tail) and the red beacons: visible at night from afar
   navGlow = [];
   for (const [n, col, sz] of [['NavLight_L', 0xff2a1a, 0.9], ['NavLight_R', 0x2aff5a, 0.9], ['TailLight', 0xffffff, 0.7], ['Beacon_Top', 0xff2010, 1.1], ['Beacon_Bot', 0xff2010, 1.1]]) {
@@ -313,7 +332,7 @@ let scenario = 'deck', scenarioOpts = {};
 const yawPitchQuat = (yaw, pitch, roll = 0) => new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, yaw, roll, 'YXZ'));
 
 function resetShip() {
-  ship.base = V3(0, 0, 0); ship.time = 0; ship.setSea(settings.sea); ship.update(0);
+  ship.base = V3(0, 0, 0); ship.time = 0; ship.setSea(settings.sea); water.setSea(settings.sea); ship.update(0);
 }
 
 function placeOnDeck(sp) {
@@ -456,9 +475,14 @@ function syncSettingsUI() {
   $('opt-fbw').checked = settings.fbw; $('opt-units').value = settings.units; $('opt-sound').checked = settings.sound; $('opt-voice').checked = settings.voice;
   $('opt-quality').value = settings.quality; $('opt-sea').value = String(settings.sea); $('opt-mouse').checked = settings.mouseStick;
   $('opt-tod').value = settings.tod; $('opt-rumble').checked = settings.rumble;
-  hud.units = settings.units; ac.fbw = settings.fbw; sound.voiceOn = settings.voice; ship.setSea(settings.sea);
-  renderer.setPixelRatio(settings.quality === 'high' ? Math.min(devicePixelRatio, 2) : 1);
-  sunLight.shadow.mapSize.set(settings.quality === 'high' ? 2048 : 1024, settings.quality === 'high' ? 2048 : 1024);
+  hud.units = settings.units; ac.fbw = settings.fbw; sound.voiceOn = settings.voice; ship.setSea(settings.sea); water.setSea(settings.sea);
+  // graphics presets: low = plain forward rendering; medium adds clouds and bloom; high adds AO and motion blur; ultra full DPR
+  const Q = settings.quality = ['low', 'medium', 'high', 'ultra'].includes(settings.quality) ? settings.quality : 'high';
+  renderer.setPixelRatio(Q === 'ultra' ? Math.min(devicePixelRatio, 2) : Q === 'high' ? Math.min(devicePixelRatio, 1.5) : 1);
+  const sm = Q === 'low' ? 1024 : Q === 'medium' ? 2048 : 4096;
+  if (sunLight.shadow.mapSize.x !== sm) { sunLight.shadow.mapSize.set(sm, sm); if (sunLight.shadow.map) { sunLight.shadow.map.dispose(); sunLight.shadow.map = null; } }
+  postfx.setQuality(Q);
+  clouds.visible = !postfx.enabled || !postfx.post.opts.clouds;
   resize();
 }
 $('opt-fbw').onchange = e => { settings.fbw = e.target.checked; ac.fbw = settings.fbw; saveSettings(); };
@@ -466,7 +490,7 @@ $('opt-units').onchange = e => { settings.units = e.target.value; hud.units = se
 $('opt-sound').onchange = e => { settings.sound = e.target.checked; saveSettings(); if (sound.master) sound.master.gain.value = settings.sound ? 0.7 : 0; };
 $('opt-voice').onchange = e => { settings.voice = e.target.checked; sound.voiceOn = settings.voice; saveSettings(); };
 $('opt-quality').onchange = e => { settings.quality = e.target.value; saveSettings(); syncSettingsUI(); };
-$('opt-sea').onchange = e => { settings.sea = parseFloat(e.target.value); ship.setSea(settings.sea); saveSettings(); };
+$('opt-sea').onchange = e => { settings.sea = parseFloat(e.target.value); ship.setSea(settings.sea); water.setSea(settings.sea); saveSettings(); };
 $('opt-mouse').onchange = e => { settings.mouseStick = e.target.checked; saveSettings(); };
 for (const b of document.querySelectorAll('[data-scn]')) b.onclick = () => { lastLesson = null; startScenario(b.dataset.scn, true, b.dataset.night ? { night: true } : {}); };
 // a clicked button must not keep keyboard focus: Space / Enter are flight controls and would 'press' it again
@@ -757,6 +781,8 @@ function handleEvents() {
     if (e.kind === 'stopped') { state.shake = 0.4; rumble(0.8, 1, 600); if (!instructor.active) setTimeout(showReport, 600); }
     if (e.kind === 'touch') rumble(0.3 * Math.min(e.sink / 3, 1.5), 0.6, 160);
     if (e.kind === 'crash') { flash(e.msg + '. Press Backspace to try again.', 999); sound.thump(2); rumble(1, 1, 700);
+      // the aftermath: white water for a sea impact, a burning wreck on (or against) the carrier
+      if (/sea|Ditched/i.test(e.msg)) fx.splash(ac.pos); else if (!/Structural|fire spread/.test(e.msg) || ac.pos.y < 60) fx.burn(ac.pos, ac.pos.distanceTo(ship.position) < 400 ? ship : null);
       if (!instructor.active) setTimeout(() => { if (ac.crashed) debrief.show({ title: 'Flight debrief', ok: false, why: e.msg }); }, 2500); }
     if (e.kind === 'bit') sound.say('Flight control system ready', 'bit', 20);
   }
@@ -955,9 +981,39 @@ function statusBar() {
 }
 
 // ------------------------------------------------------------------ main loop
+function draw() {
+  if (postfx.enabled) { postfx.render(); return; }
+  renderer.render(scene, camera);
+  fx.setDepth(null); renderer.autoClear = false; renderer.render(fx.fxScene, camera); renderer.autoClear = true;
+}
+// per-frame inputs for the post stack: cloud lighting from the time of day, cinematic depth of field
+const _sc = new THREE.Color(), _top = new THREE.Color(), _bot = new THREE.Color();
+function postUpdate(dt) {
+  const n = tod.night || 0;
+  // green water and spray: in a rough sea the deck runs wet, and so does a jet sitting on it
+  const wet = Math.max(0, Math.min(1, (settings.sea - 0.9) / 0.9));
+  ship.setWet(wet); acDetail.update(ac.onDeck ? wet * 0.8 : 0);
+  // exhaust plumes for the heat haze: stronger and longer with power and reheat
+  const plumes = [];
+  if (model && !ac.crashed) for (let i = 0; i < 2; i++) {
+    const e = ac.engines[i], N = e.N || 0, ab = e.AB || 0;
+    const k = e.state === 'off' ? 0 : Math.max(0, N - 0.15) * (0.6 + 0.6 * ab);
+    plumes.push({ o: model.localToWorld(V3(i ? 0.87 : -0.87, -0.45, st2z(15.4))), d: V3(0, 0, 1).applyQuaternion(model.quaternion), len: 10 + 22 * N * N + 14 * ab, k });
+  }
+  postfx.setPlumes(plumes, state.paused ? 0 : dt);
+  // the haze lives in the lowest ~2 km: looking down from altitude the line of sight crosses less of it
+  scene.fog.density = tod.fog[1] / (1 + Math.max(0, camera.position.y) / 1500);
+  _sc.copy(sunLight.color).multiplyScalar(sunLight.intensity * (n > 0.9 ? 0.6 : 1.0));
+  _top.set(n > 0.9 ? 0x0b1220 : n > 0.3 ? 0x6a6f8e : 0x8fb2dc).multiplyScalar(n > 0.9 ? 0.25 : 1.0);
+  _bot.set(n > 0.9 ? 0x05070b : n > 0.3 ? 0x4a3c3c : 0x7d8894);
+  const cine = state.replay || state.view === 'flyby' || state.view === 'deck';
+  postfx.update(state.paused ? 0 : dt, { sun, sunCol: _sc, skyTop: _top, skyBot: _bot, fogCol: scene.fog.color, fogD: scene.fog.density, night: n,
+    cover: n > 0.9 ? 0.38 : n > 0.3 ? 0.5 : 0.44, dof: cine ? 1 : 0, focus: camera.position.distanceTo(ac.pos), flare: n < 0.3 });
+}
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
   renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+  postfx.setSize(w, h);
   hud.resize(w, h, Math.min(devicePixelRatio, 2));
 }
 window.addEventListener('resize', resize);
@@ -1007,7 +1063,7 @@ function frame(now) {
   if (!CAPTURE) requestAnimationFrame(frame);
   const dt = Math.min((now - last) / 1000, 0.1); last = now;
   const time = now / 1000;
-  if (!model) { renderer.render(scene, camera); return; }
+  if (!model) { draw(); return; }
   if (!state.started) state.orbit.yaw += dt * 0.08;
   const live = !state.paused && !state.replay;
   if (state.replay) replay.update(state.paused ? 0 : dt);
@@ -1039,13 +1095,9 @@ function frame(now) {
   updateChecklist();
   if (state.msgT > 0 && state.msgT < 900) { state.msgT -= dt; if (state.msgT <= 0) $('msg').hidden = true; }
   animateModel(dt, time);
-  fx.update(state.paused ? 0 : dt, ac, model, env);
+  fx.update(state.paused ? 0 : dt, ac, model, env, { ship, sea: settings.sea });
   sunLight.position.copy(ac.pos).addScaledVector(sun, 250); sunLight.target.position.copy(ac.pos);
-  water.material.uniforms.time.value += dt * 0.6;
-  water.position.set(Math.round(camera.position.x / 200) * 200, 0, Math.round(camera.position.z / 200) * 200);
-  // from altitude the small waves are sub-pixel: calm the normal distortion and sun glints so the sea doesn't sparkle and alias
-  { const k = clamp((camera.position.y - 300) / 2500, 0, 1), U = water.material.uniforms;
-    U.distortionScale.value = (3.2 - 2.5 * k) * (tod.night > 0.9 ? 0.35 : 1); if (U.sunColor) U.sunColor.value.setRGB(1, 0.957, 0.878).multiplyScalar((1 - 0.7 * k) * tod.sunCol); }
+  water.update(state.paused ? 0 : dt, camera, ship);
   // night sky follows the camera; landing light on with the gear down
   night.stars.position.copy(camera.position);
   night.moon.position.copy(camera.position).addScaledVector(sun, 80000);
@@ -1053,6 +1105,7 @@ function frame(now) {
   if (landingLight) { landingLight.intensity = ac.sw.ldglt && ac.gear > 0.9 && ac.power() !== 'none' ? 60000 : 0; landingLight.visible = landingLight.intensity > 0; }
   ckFlood.visible = ckFlood.intensity > 0 && state.view === 'cockpit';
   updateCamera(dt);
+  postUpdate(dt);
   // film capture: a shot script can take over the camera after the normal camera logic
   if (CAPTURE && window.__camHook) { window.__camHook(camera, dt); camera.updateProjectionMatrix(); camera.updateMatrixWorld(); }
   if (cockpitReady) cockpit.update(dt, { inside: state.view === 'cockpit', headYaw: state.head.yaw, headPitch: state.head.pitch,
@@ -1087,10 +1140,10 @@ function frame(now) {
   $('stickmark').hidden = !(settings.mouseStick && state.started && !state.paused);
   if (settings.mouseStick) { const sm = $('stickmark'); sm.style.left = (mouse.x * 100) + '%'; sm.style.top = (mouse.y * 100) + '%'; }
   sound.update(ac, inside, state.paused);
-  renderer.render(scene, camera);
+  draw();
   endInterp();
 }
-window.__sim = { renderStep(dt) { frame(last + dt * 1000); }, get renderer() { return renderer; }, get model() { return model; }, fx, tod: () => tod, keys, probeTipWorld, ac, state, ship, env, camera, nodes, hud, ops, settings, cockpit, instructor, recorder, replay, debrief, tanker, bindings, control, startLesson, startScenario, applyTimeOfDay, lookAtControl, get ready() { return cockpitReady && tanker.ready; },
+window.__sim = { postfx, water, renderStep(dt) { frame(last + dt * 1000); }, get renderer() { return renderer; }, get model() { return model; }, fx, tod: () => tod, keys, probeTipWorld, ac, state, ship, env, camera, nodes, hud, ops, settings, cockpit, instructor, recorder, replay, debrief, tanker, bindings, control, startLesson, startScenario, applyTimeOfDay, lookAtControl, get ready() { return cockpitReady && tanker.ready; },
   // run the whole sim without rendering (for tests): physics, carrier ops, events, instructor, recorder, tanker
   tick(secs, ctl) {
     const h = 1 / 60, n = Math.round(secs / h);
