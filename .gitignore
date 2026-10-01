@@ -5,3 +5,6 @@ tests/shots/
 *.pyc
 # film masters over GitHub's 100 MB limit stay local
 promo/out/*FULL HD*
+
+# macOS Finder metadata
+.DS_Store
