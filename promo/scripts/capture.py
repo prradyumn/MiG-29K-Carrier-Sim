@@ -6,7 +6,8 @@ from PIL import Image
 HERE = pathlib.Path(__file__).resolve().parent; PROMO = HERE.parent; SIM = PROMO.parent / 'sim'; TESTS = PROMO.parent / 'tests'
 OUT = PROMO / 'build' / 'shots'; SHEETS = PROMO / 'build' / 'sheets'
 ALL = ['guard', 'cwp', 'gauges', 'instructor', 'wingfold', 'ab_stops', 'launch_side', 'launch_ck', 'climb', 'highg', 'greyout', 'groove',
-       'trap_deck', 'night_groove', 'night_chase', 'fire', 'tanker_chase', 'tanker_ck', 'hero', 'ui_menu', 'ui_debrief']
+       'trap_deck', 'night_groove', 'night_chase', 'fire', 'tanker_chase', 'tanker_ck', 'hero', 'ui_menu', 'ui_debrief',
+       'hero_open', 'flyby_low', 'clouds', 'roll', 'vapour', 'storm', 'hero_end']
 names = ALL if sys.argv[1] == 'all' else sys.argv[1].split(',')
 preview = '--preview' in sys.argv          # every 6th frame only, for framing checks
 
@@ -20,7 +21,7 @@ async def shoot(p, name, port):
     await pg.evaluate('document.fonts.ready')
     await pg.add_script_tag(path=str(TESTS / 'ap.js'))
     await pg.add_script_tag(path=str(HERE / 'shots.js'))
-    n = await pg.evaluate(f"() => {{ window.__sim.state.started = true; const s = window.SHOTS['{name}']; s.setup(); return s.frames; }}")
+    n = await pg.evaluate(f"() => {{ window.__sim.state.started = true; const s = window.SHOTS['{name}']; s.setup(); const W = window.__sim.water; if (W.u.uSea.value === 0) W.setSea(1); return s.frames; }}")
     d = OUT / name; d.mkdir(parents=True, exist_ok=True)
     for f in d.glob('*.jpg'): f.unlink()
     t0 = time.time(); step = 6 if preview else 1

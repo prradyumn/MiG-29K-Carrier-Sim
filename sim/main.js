@@ -662,6 +662,7 @@ canvas.addEventListener('wheel', e => {
 }, { passive: false });
 
 function readInputs(dt) {
+  if (CAPTURE && window.__holdInputs) return;   // film shots drive ac.inp themselves
   const k = code => !!keys[code];
   const tgt = {
     pitch: (k('ArrowDown') || k('KeyS') ? 1 : 0) - (k('ArrowUp') || k('KeyW') ? 1 : 0),

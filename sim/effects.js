@@ -153,7 +153,7 @@ export class Effects {
     const cone = new THREE.Mesh(new THREE.CylinderGeometry(3.6, 1.2, 4.5, 40, 1, true),
       new THREE.ShaderMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, uniforms: { k: { value: 0 } },
         vertexShader: '#include <common>\n#include <logdepthbuf_pars_vertex>\nvarying vec3 vN; varying vec3 vV; varying vec2 vUv; void main(){ vUv=uv; vec4 mv=modelViewMatrix*vec4(position,1.); vN=normalize(normalMatrix*normal); vV=normalize(-mv.xyz); gl_Position=projectionMatrix*mv;\n#include <logdepthbuf_vertex>\n}',
-        fragmentShader: '#include <common>\n#include <logdepthbuf_pars_fragment>\nuniform float k; varying vec3 vN; varying vec3 vV; varying vec2 vUv; void main(){\n#include <logdepthbuf_fragment>\nfloat f = pow(1.0-abs(dot(vN,vV)),1.5); float e = smoothstep(0.0,0.35,vUv.y)*smoothstep(1.0,0.55,vUv.y); gl_FragColor = vec4(vec3(1.0), f*e*k*0.55); }' }));
+        fragmentShader: '#include <common>\n#include <logdepthbuf_pars_fragment>\nuniform float k; varying vec3 vN; varying vec3 vV; varying vec2 vUv; void main(){\n#include <logdepthbuf_fragment>\nfloat f = pow(1.0-abs(dot(vN,vV)),1.5); float e = smoothstep(0.0,0.35,vUv.y)*smoothstep(1.0,0.55,vUv.y); gl_FragColor = vec4(vec3(1.0), f*e*k*0.9); }' }));
     cone.rotation.x = Math.PI / 2; cone.visible = false;
     this.cone = cone;
   }
@@ -270,10 +270,11 @@ export class Effects {
         if (this.acc.bow > 1 + Math.random() * 2) {
           this.acc.bow = 0;
           const sv = ship.velocity || new THREE.Vector3();
-          for (const sd of [-1, 1]) for (let k = 0; k < 18 * Math.min(1.6, sea); k++) {
-            const p = ship.localToWorld(_v.set(sd * (5 + Math.random() * 6), 1 + Math.random() * 3, -132 + Math.random() * 14)).clone();
-            const out = _w.set(sd * (3 + Math.random() * 6), 6 + Math.random() * 10 * sea, 4 + Math.random() * 8).applyQuaternion(ship.quaternion).add(sv).clone();
-            this.spawn(p, out, 2 + Math.random() * 2, 9, 2.6 + Math.random(), 0.85, 0xf4f7f8, false, { tile: 'spray', g: 9.8, drag: 0.3 });
+          // thin sheets of droplets thrown up and aft at the stem, falling back fast (not a cloud)
+          for (const sd of [-1, 1]) for (let k = 0; k < 30 * Math.min(1.6, sea); k++) {
+            const p = ship.localToWorld(_v.set(sd * (3 + Math.random() * 5), 0.5 + Math.random() * 2, -139 + Math.random() * 10)).clone();
+            const out = _w.set(sd * (4 + Math.random() * 7), 7 + Math.random() * 9 * sea, 5 + Math.random() * 9).applyQuaternion(ship.quaternion).add(sv).clone();
+            this.spawn(p, out, 0.8 + Math.random() * 1.4, 4.5, 1.4 + Math.random() * 0.8, 0.42, 0xf4f7f8, false, { tile: 'spray', g: 9.8, drag: 0.15 });
           }
         }
       }

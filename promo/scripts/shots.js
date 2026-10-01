@@ -25,7 +25,7 @@ window.SHOTS = (() => {
   const ff = (secs, ctl) => S.tick(secs, ctl);
   const shipW = (x, y, z) => S.ship.localToWorld(V(x, y, z));
   const cam = fn => { window.__camHook = fn; };
-  const base = (tod, sea = 0) => { S.settings.sea = sea; window.__camHook = null; noHud(false); coach(false); S.cockpit.highlightId = null; document.getElementById('debrief').hidden = true; document.getElementById('report').hidden = true; document.getElementById('replay').hidden = true; S.state.paused = false; return tod; };
+  const base = (tod, sea = 0) => { window.__holdInputs = true; S.settings.sea = sea; window.__camHook = null; noHud(false); coach(false); S.cockpit.highlightId = null; document.getElementById('debrief').hidden = true; document.getElementById('report').hidden = true; document.getElementById('replay').hidden = true; S.state.paused = false; return tod; };
   const approachAt = (dist, night = false) => {
     S.startScenario('approach', true, { night });
     const dir = S.ship.landDir.clone().applyQuaternion(S.ship.quaternion); dir.y = 0; dir.normalize();
@@ -35,6 +35,11 @@ window.SHOTS = (() => {
   // the test autopilot rides slightly low (wire 1); fly it half a metre high so it takes the target wire 2
   const ap = () => { S.ac.pos.y -= 0.5; window.__ap(S.ac); S.ac.pos.y += 0.5; };
   const holdBank = (ph) => clamp(0.035 * (ph - (S.ac.t.phi || 0) * R2D), -1, 1);
+  // the sea's look is visual only: show a moderate (or rough) sea even when the physics runs calm for the autopilot
+  const seaVis = (k = 1) => { S.water.setSea(k); };
+  // horizontal direction towards the sun (or moon) for lighting-aware camera placement
+  const sunH = () => { const d = S.tod().lightAz ?? S.tod().az, el = S.tod().lightEl ?? S.tod().el; const v = V().setFromSphericalCoords(1, (90 - el) * D2R, d * D2R); v.y = 0; return v.normalize(); };
+  const heading = () => { const v = S.ac.vel.clone(); v.y = 0; return v.normalize(); };
 
   return {
     // ---------------------------------------------------------------- cockpit, night: the guard lifts, battery ON, lamp test
@@ -135,15 +140,59 @@ window.SHOTS = (() => {
           c.position.copy(tgt).add(V(Math.sin(a0) * d, 0.35 + 0.4 * ease(t / 7), Math.cos(a0) * d).applyQuaternion(S.ship.quaternion)); c.up.set(0, 1, 0); c.lookAt(tgt); c.fov = 28; }); },
       step(i, t) { window.__shotT = t; S.renderStep(1 / 60); } },
     // ---------------------------------------------------------------- UI stills: training menu, debrief after a trap lesson, instant replay
-    ui_menu: { frames: 1, setup() { base(); S.applyTimeOfDay('dusk'); S.startScenario('deck', false); S.state.view = 'orbit'; S.state.started = false; S.state.paused = true;
+    ui_menu: { frames: 1, setup() { base(); S.postfx.post.opts.mb = 0; S.applyTimeOfDay('dusk'); S.startScenario('deck', false); S.state.view = 'orbit'; S.state.started = false; S.state.paused = true;
         document.getElementById('menu').hidden = false; document.getElementById('startbox').hidden = false; document.getElementById('loading').hidden = true; },
-      step() { S.state.orbit.yaw = 2.2; S.renderStep(1 / 60); } },
-    ui_debrief: { frames: 1, setup() { base(); S.startScenario('approach', true, { lesson: true }); S.applyTimeOfDay('day'); S.ac.inp.throttle = 0.3;
+      step() { S.state.orbit.yaw = 2.2; for (let k = 0; k < 4; k++) S.renderStep(1 / 60); } },
+    ui_debrief: { frames: 1, setup() { base(); S.postfx.post.opts.mb = 0; S.startScenario('approach', true, { lesson: true }); S.applyTimeOfDay('day'); S.ac.inp.throttle = 0.3;
         for (let k = 0; k < 9000 && !(S.ac.arrest && S.ac.arrest.stopped) && !S.ac.crashed; k++) ff(1 / 60, x => { if (!x.arrest) ap(); else x.inp.throttle = 0.86; });
         ff(2, x => { x.inp.throttle = 0; });
         window.__trapReport = S.ops.report; S.debrief.show({ title: '6. The trap', ok: true, pts: 96, stars: 3, time: 118, mistakes: [], metrics: { gs: 0.08, lu: 0.1, aoa: 0.4 }, id: 'trap', next: 'circuit' });
         S.state.view = 'deck'; },
       step() { S.renderStep(1 / 60); } },
+    // ================================================================ 2026-10 recut: hero and flight shots
+    // dawn on deck: a slow lateral dolly along the nose, the jet lit by the low sun, the sea alive behind
+    hero_open: { frames: 300, setup() { base(); S.startScenario('deck', true, { lesson: true }); S.applyTimeOfDay('dusk'); seaVis(1); const a = ac(); a.inp.throttle = 0; a.holdback = null; a.parkBrake = true; S.ship.jbd[0].rotation.x = Math.PI / 2; S.state.view = 'orbit'; noHud(true);
+        const sh = sunH();
+        cam((c) => { const t = window.__shotT || 0, k = ease(t / 5); const tgt = S.ac.pos.clone().add(V(0, 1.0, -2.5).applyQuaternion(S.ship.quaternion));
+          const side = V(-sh.z, 0, sh.x); const p = tgt.clone().addScaledVector(sh, 13 - 3 * k).addScaledVector(side, -7 + 9 * k); p.y = tgt.y - 0.2 + 0.5 * k;
+          c.position.copy(p); c.up.set(0, 1, 0); c.lookAt(tgt); c.fov = 30 - 3 * k; }); },
+      step(i, t) { window.__shotT = t; S.renderStep(1 / 60); } },
+    // a low pass over the ocean: rooster tail, heat haze, whitecaps; a sea-level camera pans with it
+    flyby_low: { frames: 330, setup() { base(); S.startScenario('free', true, { alt: 13, speed: 255, lesson: true }); S.applyTimeOfDay('day'); seaVis(1.1); S.ac.inp.throttle = 1; S.state.view = 'orbit'; noHud(true);
+        ff(0.3, x => { x.inp.throttle = 1; x.inp.pitch = 0; });
+        const hd = heading(), rt = V(-hd.z, 0, hd.x); const cp = S.ac.pos.clone().addScaledVector(hd, 255 * 2.6).addScaledVector(rt, 34); cp.y = 4.5;
+        cam((c) => { c.position.copy(cp); c.up.set(0, 1, 0); const tgt = S.ac.pos.clone().add(V(0, -1.5, 0)); c.lookAt(tgt);
+          const d = cp.distanceTo(S.ac.pos); c.fov = clamp(2 * Math.atan(9 / d) * R2D, 4, 62); }); },
+      step(i, t) { S.ac.inp.throttle = 1; S.ac.pos.y += (13 - S.ac.pos.y) * 0.1; S.ac.vel.y *= 0.8; S.ac.inp.roll = holdBank(0); S.renderStep(1 / 60); } },
+    // banking over the cloud tops in the sun: volumetric clouds below, flare
+    clouds: { frames: 270, setup() { base(); S.startScenario('free', true, { alt: 1250, speed: 210, lesson: true }); seaVis(1); S.applyTimeOfDay('day'); S.ac.inp.throttle = 0.9; S.state.view = 'orbit'; noHud(true);
+        ff(2.5, x => { x.inp.roll = holdBank(-48); x.inp.pitch = 0.25; x.inp.throttle = 0.9; });
+        cam((c) => { const t = window.__shotT || 0, k = ease(t / 4.5); const off = V(7 - 4 * k, -3.8, 21 - 4 * k).applyQuaternion(S.ac.quat);
+          c.position.copy(S.ac.pos).add(off); c.up.copy(V(0, 1, 0).applyQuaternion(S.ac.quat)).lerp(V(0, 1, 0), 0.55).normalize(); c.lookAt(S.ac.pos.clone().add(V(0, 2.5, -4).applyQuaternion(S.ac.quat))); c.fov = 44; }); },
+      step(i, t) { window.__shotT = t; S.ac.inp.roll = holdBank(-48); S.ac.inp.pitch = 0.25; S.ac.inp.throttle = 0.9; S.renderStep(1 / 60); } },
+    // a full aileron roll from a level chase camera (it does not roll with the jet)
+    roll: { frames: 180, setup() { base(); S.startScenario('free', true, { alt: 900, speed: 230, lesson: true }); S.applyTimeOfDay('day'); seaVis(1); S.ac.inp.throttle = 1; S.state.view = 'orbit'; noHud(true);
+        ff(1, x => { x.inp.roll = holdBank(0); x.inp.throttle = 1; });
+        cam((c) => { const t = window.__shotT || 0; const hd = heading(), rt = V(-hd.z, 0, hd.x);
+          c.position.copy(S.ac.pos).addScaledVector(hd, -17).addScaledVector(rt, 6.5 - 2 * ease(t / 3)).add(V(0, 2.2, 0)); c.up.set(0, 1, 0); c.lookAt(S.ac.pos.clone().addScaledVector(hd, 4)); c.fov = 38; }); },
+      step(i, t) { window.__shotT = t; S.ac.inp.throttle = 1; S.ac.inp.pitch = 0.04; S.ac.inp.roll = t > 0.5 && t < 2.05 ? 1 : holdBank(0); S.renderStep(1 / 60); } },
+    // transonic: the Prandtl-Glauert vapour cone at Mach 0.98, low over the sea, camera ahead and to the side
+    vapour: { frames: 200, setup() { base(); S.startScenario('free', true, { alt: 160, speed: 334, lesson: true }); S.applyTimeOfDay('day'); seaVis(1); S.ac.inp.throttle = 1; S.state.view = 'orbit'; noHud(true);
+        ff(0.5, x => { x.inp.throttle = 1; x.inp.roll = holdBank(0); x.vel.setLength(327); });
+        cam((c) => { const t = window.__shotT || 0, k = ease(t / 3.3); const hd = heading(), rt = V(-hd.z, 0, hd.x);
+          c.position.copy(S.ac.pos).addScaledVector(hd, 14 - 26 * k).addScaledVector(rt, 11).add(V(0, 1.2, 0)); c.up.set(0, 1, 0); c.lookAt(S.ac.pos); c.fov = 46; }); },
+      step(i, t) { window.__shotT = t; S.ac.inp.throttle = 1; S.ac.inp.roll = holdBank(0); S.ac.inp.pitch = 0.02 + 0.03 * Math.sin(t * 3); S.ac.vel.setLength(327); S.renderStep(1 / 60); } },
+    // the carrier in a rough sea: green water at the bow, spray, whitecaps, a wet deck
+    storm: { frames: 270, setup() { base(); S.settings.sea = 1.8; S.startScenario('deck', true, { lesson: true }); S.applyTimeOfDay('day'); S.ship.setSea(1.8); seaVis(1.8); S.state.view = 'orbit'; noHud(true);
+        for (let k = 0; k < 240; k++) S.renderStep(1 / 30);      // let the spray and the deck motion build up
+        cam((c) => { const t = window.__shotT || 0, k = ease(t / 4.5); const p = S.ship.localToWorld(V(-70 + 10 * k, 9, -170 + 14 * k)); p.y = 7 + 1.5 * Math.sin(t * 0.9);
+          c.position.copy(p); c.up.set(0, 1, 0); c.lookAt(S.ship.localToWorld(V(0, 18, -70))); c.fov = 42; }); },
+      step(i, t) { window.__shotT = t; S.renderStep(1 / 60); } },
+    // finale: dusk, the jet on deck from a low front quarter, slow push-in
+    hero_end: { frames: 420, setup() { base(); S.startScenario('deck', true, { lesson: true }); S.applyTimeOfDay('dusk'); seaVis(1); const a = ac(); a.inp.throttle = 0; a.holdback = null; a.parkBrake = true; S.ship.jbd[0].rotation.x = Math.PI / 2; S.state.view = 'orbit'; noHud(true);
+        cam((c) => { const t = window.__shotT || 0; const a0 = Math.PI + 0.62 - 0.22 * ease(t / 7); const tgt = S.ac.pos.clone().add(V(0, 0.9, -1.5).applyQuaternion(S.ship.quaternion)); const d = 23 - 5 * ease(t / 7);
+          c.position.copy(tgt).add(V(Math.sin(a0) * d, 0.35 + 0.4 * ease(t / 7), Math.cos(a0) * d).applyQuaternion(S.ship.quaternion)); c.up.set(0, 1, 0); c.lookAt(tgt); c.fov = 28; }); },
+      step(i, t) { window.__shotT = t; S.renderStep(1 / 60); } },
   };
   function holdPitchTo(th) { return clamp(0.05 * (th - (S.ac.t.theta || 0) * R2D) - 0.02 * (S.ac.t.q || 0) * R2D, -0.6, 0.6); }
   function placeBehindDrogue(dist) {

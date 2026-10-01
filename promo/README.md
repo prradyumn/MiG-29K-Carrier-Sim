@@ -1,5 +1,7 @@
 # Launch film: "Cleared Hot" (64.6 s)
 
+**October 2026 recut** (`web/scenes.js`): hero jet shots first (dawn deck, low pass over the sea, climbing turn into the sun, Blender reveal), then launch, roll, vapour cone, 8 g, trap, night, storm, tanker, debrief. Same score and beat map; new voice lines `assets/vo/h01`–`h06`. The first cut is kept in `web/scenes_v1_cleared_hot.js`. Deliverable: `out/MiG-29K Launch Film - LinkedIn v2.mp4` (1080p30, ~41 MB) from `scripts/mux_linkedin.sh`. Shot scripts set `window.__holdInputs` so the sim's keyboard reader does not override their stick inputs (capture mode only).
+
 Motion-graphics launch film for the sim. Everything is generated from code in this folder.
 
 | Part | Tool | Where |
