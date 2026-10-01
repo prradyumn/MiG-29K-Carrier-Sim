@@ -141,11 +141,15 @@ window.__circuit = (i, dt, ap, clickCtl) => {
 """
 
 async def main():
-    srv = subprocess.Popen(['python3', '-m', 'http.server', '8765', '--directory', ROOT], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    import socket; sk = socket.socket(); sk.bind(('', 0)); PORT = sk.getsockname()[1]; sk.close()   # a free port: stale servers can't block the test
+    srv = subprocess.Popen(['python3', '-m', 'http.server', str(PORT), '--directory', ROOT], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.8)
     results = {}
     async with async_playwright() as p:
-        b = await p.chromium.launch(args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'])
+        # real GPU when available (system Chrome on Metal), SwiftShader software rendering otherwise
+        gpu = os.environ.get('SWIFTSHADER') != '1'
+        b = await (p.chromium.launch(channel='chrome', args=['--use-angle=metal', '--ignore-gpu-blocklist']) if gpu else
+                   p.chromium.launch(args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']))
         pg = await b.new_page(viewport={'width': 1200, 'height': 700})
         logs = []
         pg.on('console', lambda m: logs.append(f'[{m.type}] {m.text}') if 'GL Driver' not in m.text else None)
@@ -159,9 +163,9 @@ async def main():
             if 'fonts.g' in u: return await r.fulfill(status=200, body='', headers={'content-type': 'text/css'})
             await r.continue_()
         await pg.route('**/*', route)
-        await pg.goto('http://localhost:8765/index.html')
+        await pg.goto(f'http://localhost:{PORT}/index.html'); print('page loaded', flush=True)
         await pg.wait_for_selector('#startbox', state='visible', timeout=180000)
-        await pg.wait_for_function('window.__sim && window.__sim.ready', timeout=120000)
+        await pg.wait_for_function('window.__sim && window.__sim.ready', timeout=120000); print('sim ready', flush=True)
         await pg.add_script_tag(path=str(HERE / 'ap.js'))
         await pg.add_script_tag(content=STUDENT)
         await pg.evaluate("() => { const S = window.__sim; const P = S.nodes.IFRProbe; let far = null, best = 0; P.traverse(o => { if (!o.isMesh) return; const A = o.geometry.attributes.position; for (let i = 0; i < A.count; i++) { const v = new S.ac.pos.constructor().fromBufferAttribute(A, i); if (v.length() > best) { best = v.length(); far = v; } } }); S.__probeTip = far; }")
