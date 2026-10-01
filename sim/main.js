@@ -1097,7 +1097,7 @@ function frame(now) {
   animateModel(dt, time);
   fx.update(state.paused ? 0 : dt, ac, model, env, { ship, sea: settings.sea });
   sunLight.position.copy(ac.pos).addScaledVector(sun, 250); sunLight.target.position.copy(ac.pos);
-  water.update(state.paused ? 0 : dt, camera, ship);
+  water.update(dt, camera, ship);   // the sea keeps moving behind the menu and the pause screen
   // night sky follows the camera; landing light on with the gear down
   night.stars.position.copy(camera.position);
   night.moon.position.copy(camera.position).addScaledVector(sun, 80000);

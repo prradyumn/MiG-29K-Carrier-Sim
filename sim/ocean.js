@@ -88,10 +88,14 @@ export class Ocean extends THREE.Mesh {
           // swell normal and crest steepness per pixel; waves shorter than a few pixels fade out (no shimmer)
           float foot = length(fwidth(vP0)) + 1e-3, camD = length(vWPos.xz - cameraPosition.xz);
           vec3 nrm = vec3(0.0, 1.0, 0.0); float jac = 1.0, slopeVar = 0.0;
+          vec2 pdx = dFdx(vP0), pdy = dFdy(vP0);
           for (int i = 0; i < ${WAVES.length}; i++) {
             float L = uWaves[i].x; vec2 dir = uWaves[i].yz;
-            float keep = (1.0 - smoothstep(L * 150.0, L * 400.0, camD)) * (1.0 - smoothstep(L * 0.12, L * 0.3, foot));
             float k = 6.2831853 / L;
+            // anisotropic anti-aliasing: a wave only shimmers if its phase changes too fast across a pixel in
+            // either screen direction; swell lines seen side-on at grazing angles stay crisp to the horizon
+            float dph = k * max(abs(dot(dir, pdx)), abs(dot(dir, pdy)));
+            float keep = (1.0 - smoothstep(L * 150.0, L * 400.0, camD)) * (1.0 - smoothstep(0.7, 1.8, dph));
             // a wave too small to resolve is not gone: its slopes roughen the surface (Toksvig / LEAN filtering)
             slopeVar += 0.5 * pow(k * uAmp[i], 2.0) * (1.0 - keep);
             float A = uAmp[i] * keep;
@@ -108,6 +112,23 @@ export class Ocean extends THREE.Mesh {
           float fn = foamNoise(vWPos.xz);
           // whitecaps: steep crests break; more of them, and bigger, as the wind (sea state) rises
           float foam = smoothstep(0.36, 0.72, vCrest + (fn - 0.5) * 0.5) * smoothstep(0.35, 1.5, uSea) * 0.85;
+          // white horses across the whole sea: patches that break on the dominant crests, ride downwind with the
+          // waves (~5.5 m/s), live ~9 s and fade. Coverage follows the sea state (~2 % moderate, ~9 % rough).
+          // Beyond the distance where a patch is smaller than a pixel they average into a paler tone, as at sea.
+          {
+            float tt = uTime / 9.0, i0 = floor(tt), fr = smoothstep(0.0, 1.0, fract(tt));
+            vec2 q = (vWPos.xz - vec2(0.0, uTime * 5.5)) * 0.045;
+            float n = mix(fbm(q + i0 * 17.31), fbm(q + (i0 + 1.0) * 17.31), fr);
+            float thr = mix(0.76, 0.63, smoothstep(0.3, 1.8, uSea));
+            float froth = fbm(vWPos.xz * 0.55 + vec2(uTime * 0.15, uTime * 0.6));
+            float far = smoothstep(2.0, 7.0, foot);                    // froth detail averages out first
+            float cap = smoothstep(thr, thr + 0.05, n) * mix(smoothstep(0.3, 0.62, froth), 0.55, far);
+            cap = mix(cap, smoothstep(0.3, 1.8, uSea) * 0.06, smoothstep(30.0, 90.0, foot));   // then whole patches
+            float wc = cap * (dfade > 0.0 ? mix(1.0, 0.45 + 0.9 * vCrest, dfade) : 1.0) * smoothstep(0.25, 0.9, uSea);
+            // long wind streaks of spent foam in a rough sea
+            float streaks = smoothstep(0.6, 0.78, fbm(vec2(vWPos.x * 0.07, (vWPos.z - uTime * 3.0) * 0.009))) * smoothstep(1.0, 1.8, uSea) * (1.0 - far) * 0.35;
+            foam = max(foam, max(wc * 0.9, streaks));
+          }
           float slick = 0.0;
           if (uShip.w > 0.0) {
             vec2 rel = vWPos.xz - uShip.xy; vec2 fwd = vec2(sin(uShip.z), -cos(uShip.z));
@@ -127,7 +148,7 @@ export class Ocean extends THREE.Mesh {
             foam = max(foam, clamp(white * 0.85 + bow * patchy - 0.03, 0.0, 0.75) + vee * patchy);
             slick = churn;                                         // the turbulent wake flattens the ripples
           }
-          vec3 rp = ripple(vWPos.xz, 9.0, vec2(0.012, 0.019)) + ripple(vWPos.xz, 37.0, vec2(-0.006, 0.011)) * 0.8 + ripple(vWPos.xz, 3.1, vec2(0.03, -0.02)) * 0.35 * dfade;
+          vec3 rp = ripple(vWPos.xz, 9.0, vec2(0.03, 0.06)) + ripple(vWPos.xz, 37.0, vec2(-0.012, 0.025)) * 0.8 + ripple(vWPos.xz, 3.1, vec2(0.11, -0.07)) * 0.35 * dfade;
           // ripple slopes on top of the swell
           float rk = 0.06 * (0.4 + 0.6 * dfade) * (1.0 - 0.6 * slick);
           vec3 nW = normalize(normalize(nrm) + vec3(rp.x * rk, 0.0, rp.z * rk));
@@ -163,7 +184,7 @@ export class Ocean extends THREE.Mesh {
           #include <opaque_fragment>`);
       this.shader = sh;
     };
-    mat.customProgramCacheKey = () => 'ocean-v4';
+    mat.customProgramCacheKey = () => 'ocean-v6';
   }
   setSea(s) {
     this.u.uSea.value = s;
