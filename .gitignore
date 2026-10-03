@@ -8,3 +8,7 @@ promo/out/*FULL HD*
 
 # macOS Finder metadata
 .DS_Store
+
+# raw elevation data and Blender intermediates for the glacier location (regenerable)
+glacier/dem/
+glacier/build/

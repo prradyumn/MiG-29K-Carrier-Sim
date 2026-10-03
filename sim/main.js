@@ -6,6 +6,9 @@ import { Ocean } from './ocean.js';
 import { PostFX } from './postfx.js';
 import { loadCockpitDetail } from './cockpitdetail.js';
 import { AircraftDetail } from './aircraftdetail.js';
+import { Terrain } from './terrain.js';
+import { ValleyRun, RunwayLights, gradeLanding } from './glaciermissions.js';
+import { Snowfall } from './snowfall.js';
 import { HUD, Displays } from './hud.js';
 import { Sound } from './audio.js';
 import { Effects } from './effects.js';
@@ -57,6 +60,28 @@ scene.add(water);
 const clouds = makeClouds(scene);
 const postfx = new PostFX(renderer, scene, camera);
 const acDetail = new AircraftDetail();
+// ---- locations: the carrier at sea, or the Siachen glacier / Thoise airbase (real terrain, loaded on first use)
+const terrain = new Terrain(renderer); scene.add(terrain);
+const GLACIER = { thoise: 1, glacier: 1, valley: 1, thoise_app: 1 };
+let LOC = 'carrier', valley = null, rwLights = null, landRw = 10;
+const snowfall = new Snowfall(); scene.add(snowfall);
+// weather at the glacier: clear (a thin layer above the summits) or snow with cloud filling the valleys
+function applyWeather() {
+  const g = LOC === 'glacier', snow = g && settings.weather === 'snow', cu = postfx.post.cloud.material.uniforms;
+  cu.uBase.value = !g ? 1500 : snow ? 4300 : 7200; cu.uTop.value = !g ? 3200 : snow ? 6600 : 8800;
+  if (terrain.u) terrain.u.uSnowExtra.value = snow ? 0.35 : 0;
+}
+function setLocation(loc) {
+  LOC = loc; const g = loc === 'glacier';
+  // wind: the open-sea northerly at the carrier; in the Nubra valley it is channelled along the valley axis
+  // (and so down the runway: a 5 m/s headwind for runway 10)
+  if (g && terrain.rw) WIND.set(-terrain.rw.dir.x * 5, 0, -terrain.rw.dir.y * 5); else WIND.set(0, 0, 7);
+  env.windKt = WIND.length() * 1.944;
+  terrain.visible = g; ship.visible = !g; water.visible = !g;
+  applyWeather();
+  if (rwLights) rwLights.setVisible(g);
+  if (valley && !g) valley.stop();
+}
 const night = makeStars(scene);
 const ship = new Carrier({ speed: 12 });
 scene.add(ship);
@@ -66,7 +91,7 @@ postfx.setEffects(fx);
 const WIND = V3(0, 0, 7);               // natural wind from the north, 7 m/s
 
 // ------------------------------------------------------------------ settings
-const settings = { fbw: true, units: 'metric', sound: true, voice: true, quality: 'high', sea: 1, mouseStick: false, tod: 'day', rumble: true };
+const settings = { fbw: true, units: 'metric', sound: true, voice: true, quality: 'high', sea: 1, mouseStick: false, tod: 'day', rumble: true, weather: 'clear' };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('mig29k-settings') || '{}')); } catch (e) { }
 function saveSettings() { try { localStorage.setItem('mig29k-settings', JSON.stringify(settings)); } catch (e) { } }
 
@@ -96,6 +121,7 @@ const sim = {
   ac, ship, ops, cockpit, hooks, sound, camera, state, get env() { return env; }, get tanker() { return tanker.active ? tanker : null; },
   startScenario: (k, run, o) => startScenario(k, run, { ...o, lesson: true }), flash, control, lookAtControl: id => lookAtControl(id),
   shipLocal: p => ship.worldToLocal(p.clone()),
+  get terrain() { return terrain.ready ? terrain : null; },
 };
 const instructor = new Instructor(sim);
 const replay = new Replay({ rec: recorder, ac, ship, state, flash });
@@ -335,6 +361,41 @@ function resetShip() {
   ship.base = V3(0, 0, 0); ship.time = 0; ship.setSea(settings.sea); water.setSea(settings.sea); ship.update(0);
 }
 
+function setupGlacier(kind, opts) {
+  const T = terrain, r = T.rw, dir = V3(r.dir.x, 0, r.dir.y), yawOf = d => Math.atan2(-d.x, -d.z);
+  ac.stores = false; ac.flapCmd = ac.flap = 0;
+  if (kind === 'thoise') {
+    const p = V3(r.t10.x, 0, r.t10.y).addScaledVector(dir, 110); p.y = T.surface(p.x, p.z).h + 1.84;
+    ac.pos.copy(p); ac.vel.set(0, 0, 0); ac.quat.copy(yawPitchQuat(yawOf(dir), 0));
+    ac.setEnginesRunning(); ac.gearCmd = ac.gear = 1; ac.flapCmd = ac.flap = 1; ac.fuel = DATA.fuelMax * 0.75; ac.inp.throttle = 0; ac.parkBrake = false;
+    landRw = 10;
+    if (!opts.lesson) flash('Thoise runway 10: 3,048 m at 3,060 m elevation. The air is about a quarter thinner than at sea level. Hold the brakes (X), full afterburner (Tab), release and rotate at about 280 km/h.', 10);
+    state.view = 'cockpit'; state.head = { yaw: 0, pitch: -6 * D2R };
+  } else if (kind === 'thoise_app') {
+    const td = V3(r.t10.x, 0, r.t10.y).addScaledVector(dir, 300), dist = 8000, gs = 3 * D2R, v = 78;
+    ac.pos.copy(td).addScaledVector(dir, -dist); ac.pos.y = r.e10 + dist * Math.tan(gs) + 2;
+    ac.vel.copy(dir).multiplyScalar(v); ac.vel.y = -v * Math.tan(gs);
+    ac.quat.copy(yawPitchQuat(yawOf(dir), 6 * D2R));
+    ac.setEnginesRunning(); ac.gearCmd = ac.gear = 1; ac.flapCmd = ac.flap = 1; ac.fuel = 1500; ac.inp.throttle = 0.62; for (const e of ac.engines) e.N = 0.9;
+    landRw = 10;
+    if (!opts.lesson) flash('8 km final for Thoise runway 10, down the Nubra valley. Fly the PAPI (two white, two red = 3°) at 10.5° AoA. True airspeed is about 17 % above indicated here: plan a longer rollout.', 10);
+    state.view = 'cockpit'; state.head = { yaw: 0, pitch: -8 * D2R };
+  } else if (kind === 'valley') {
+    const s0 = valley.start(T, ac), p = V3(s0.start.x, 0, s0.start.y).addScaledVector(s0.dir, -1500);
+    p.y = s0.h + 300; const v = 200;
+    ac.pos.copy(p); ac.vel.copy(s0.dir).multiplyScalar(v); ac.quat.copy(yawPitchQuat(yawOf(s0.dir), 2 * D2R));
+    ac.setEnginesRunning(); ac.gearCmd = ac.gear = 0; ac.fuel = DATA.fuelMax * 0.6; ac.inp.throttle = 0.8; for (const e of ac.engines) e.N = 0.97;
+    if (!opts.lesson) flash('Valley run: up the Siachen glacier through the gates (230 m above the ice). Next gate on the nav display. The clock is running.', 9);
+    state.view = 'chase';
+  } else {
+    const sn = V3(T.meta.snout[0], 0, T.meta.snout[1]), hd = V3(T.meta.head[0], 0, T.meta.head[1]), d = hd.clone().sub(sn).normalize();
+    ac.pos.copy(sn).addScaledVector(d, -4000); ac.pos.y = 6500; ac.vel.copy(d).multiplyScalar(230); ac.quat.copy(yawPitchQuat(yawOf(d), 2.5 * D2R));
+    ac.setEnginesRunning(); ac.gearCmd = ac.gear = 0; ac.fuel = DATA.fuelMax * 0.8; ac.inp.throttle = 0.75; for (const e of ac.engines) e.N = 0.95;
+    if (!opts.lesson) flash('Over the snout of the Siachen glacier at 6,500 m, heading up the ice towards Indira Col. Thoise is south-east: see the nav display.', 9);
+    state.view = 'chase'; state.head = { yaw: 0, pitch: -6 * D2R };
+  }
+  if (kind !== 'valley' && valley) valley.stop();
+}
 function placeOnDeck(sp) {
   const local = V3(sp.x, SHIP.deckY + 1.84, sp.z);
   ac.pos.copy(ship.localToWorld(local.clone()));
@@ -344,6 +405,13 @@ function placeOnDeck(sp) {
 }
 
 function startScenario(kind, run = true, opts = {}) {
+  if (GLACIER[kind] && !terrain.ready) {
+    flash('Loading the Siachen terrain: 82 × 126 km of real elevation data…', 60);
+    terrain.load().then(() => { rwLights = new RunwayLights(scene, terrain); valley = new ValleyRun(scene); startScenario(kind, run, opts); })
+      .catch(e => { console.error(e); flash('Could not load the glacier terrain: ' + e.message, 10); });
+    return;
+  }
+  setLocation(GLACIER[kind] ? 'glacier' : 'carrier');
   if (replay.on) replay.stop();
   if (!opts.lesson && instructor.active) instructor.stop();
   scenario = kind; scenarioOpts = opts;
@@ -359,7 +427,9 @@ function startScenario(kind, run = true, opts = {}) {
   recorder.reset(); tanker.stop(); debrief.el.hidden = true; $('report').hidden = true;
   applyTimeOfDay(opts.night ? 'night' : settings.tod);
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-  if (kind === 'deck' || kind === 'short' || kind === 'cold') {
+  state.graded = false;
+  if (GLACIER[kind]) setupGlacier(kind, opts);
+  else if (kind === 'deck' || kind === 'short' || kind === 'cold') {
     const sp = kind === 'short' ? SHIP.start[1] : SHIP.start[0];
     const local = placeOnDeck(sp);
     ac.gearCmd = ac.gear = 1; ac.flapCmd = ac.flap = 1;
@@ -474,7 +544,7 @@ function updateChecklist() {
 function syncSettingsUI() {
   $('opt-fbw').checked = settings.fbw; $('opt-units').value = settings.units; $('opt-sound').checked = settings.sound; $('opt-voice').checked = settings.voice;
   $('opt-quality').value = settings.quality; $('opt-sea').value = String(settings.sea); $('opt-mouse').checked = settings.mouseStick;
-  $('opt-tod').value = settings.tod; $('opt-rumble').checked = settings.rumble;
+  $('opt-tod').value = settings.tod; $('opt-weather').value = settings.weather || 'clear'; $('opt-rumble').checked = settings.rumble;
   hud.units = settings.units; ac.fbw = settings.fbw; sound.voiceOn = settings.voice; ship.setSea(settings.sea); water.setSea(settings.sea);
   // graphics presets: low = plain forward rendering; medium adds clouds and bloom; high adds AO and motion blur; ultra full DPR
   const Q = settings.quality = ['low', 'medium', 'high', 'ultra'].includes(settings.quality) ? settings.quality : 'high';
@@ -507,6 +577,7 @@ renderLessons();
 for (const [t, p] of [['tab-train', 'pane-train'], ['tab-free', 'pane-free']]) $(t).onclick = () => {
   for (const [t2, p2] of [['tab-train', 'pane-train'], ['tab-free', 'pane-free']]) { $(t2).setAttribute('aria-selected', String(t2 === t)); $(p2).hidden = t2 !== t; }
 };
+$('opt-weather').onchange = e => { settings.weather = e.target.value; saveSettings(); applyWeather(); };
 $('opt-tod').onchange = e => { settings.tod = e.target.value; saveSettings(); if (!instructor.active && !scenarioOpts.night) applyTimeOfDay(settings.tod); };
 $('opt-rumble').onchange = e => { settings.rumble = e.target.checked; saveSettings(); };
 $('opt-bind').onclick = () => bindings.open();
@@ -727,6 +798,7 @@ const zero = V3();
 const env = {
   wind: WIND, shipVelocity: ship.velocity,
   surface(x, z) {
+    if (LOC === 'glacier') return terrain.surface(x, z);
     const d = ship.surfaceAt(x, z);
     if (d) return d;
     return { h: 0, n: V3(0, 1, 0), v: zero, water: true };
@@ -739,9 +811,16 @@ const env = {
     w.x += tb * (Math.sin(t * 0.9 + p.z * 0.003) + 0.5 * Math.sin(t * 2.1 + p.x * 0.004));
     w.y += tb * 0.6 * Math.sin(t * 1.3 + p.x * 0.002 + p.z * 0.002);
     w.z += tb * 0.6 * Math.sin(t * 0.7 + 2);
+    if (LOC === 'glacier') {
+      // mountain wind: valley channelling and rotor turbulence close to the terrain
+      const agl = p.y - terrain.heightAt(p.x, p.z), k = Math.max(0, 1 - agl / 1200);
+      w.x += k * 2.2 * Math.sin(t * 1.7 + p.z * 0.006); w.y += k * 1.6 * Math.sin(t * 2.3 + p.x * 0.005); w.z += k * 1.4 * Math.sin(t * 1.1 + 1);
+      return w;
+    }
     return w.add(ship.wakeAt(p, t));
   },
   obstacle(p) {
+    if (LOC === 'glacier') return false;
     const l = ship.worldToLocal(p.clone());
     const I = SHIP.island;
     if (l.x > I.x0 - 3 && l.x < I.x1 + 2 && l.z > I.z0 - 5 && l.z < I.z1 + 5 && l.y < SHIP.deckY + I.top) return true;
@@ -774,6 +853,7 @@ function handleEvents() {
     if (e.kind === 'hotstart') sound.say('Engine overheat', 'egt', 4);
     if (e.kind === 'tyres') { sound.thump(1.2); fx.sparks(e.pos, ship.velocity); }
     if (e.kind === 'fail' && e.what === 'eng') { state.shake = Math.max(state.shake, 0.5); sound.thump(0.8); }
+    if (e.kind === 'touch' && LOC === 'glacier' && terrain.ready && !state.graded && ac.launchT > 5) { state.graded = true; const msg = gradeLanding(terrain, e.pos, e.sink, landRw); flash(msg, 10); recorder.event(state.simTime, 'landing', msg, /^Good/.test(msg) ? 'info' : 'mistake'); }
     if (e.kind === 'touch') { const k = clamp(e.sink / 3, 0.3, 1.5); sound.thump(k); if (e.vRel > 25) { fx.tyreSmoke(e.pos, env.surface(e.pos.x, e.pos.z).v, 1); sound.squeal(); } state.shake = Math.max(state.shake, 0.25 * k); }
     if (e.kind === 'touchdown' && e.sink > 5.2) flash('Hard landing: ' + e.sink.toFixed(1) + ' m/s sink', 4);
     if (e.kind === 'scrape') { fx.sparks(e.pos, ship.velocity); flash('Tail scrape!', 2); }
@@ -1003,13 +1083,15 @@ function postUpdate(dt) {
   }
   postfx.setPlumes(plumes, state.paused ? 0 : dt);
   // the haze lives in the lowest ~2 km: looking down from altitude the line of sight crosses less of it
-  scene.fog.density = tod.fog[1] / (1 + Math.max(0, camera.position.y) / 1500);
+  const wSnow = LOC === 'glacier' && settings.weather === 'snow';
+  snowfall.update(state.paused ? 0 : dt, camera, WIND, wSnow ? 1 : 0, n > 0.9 ? 0.15 : n > 0.3 ? 0.6 : 1);
+  scene.fog.density = tod.fog[1] * (LOC === 'glacier' ? (wSnow ? 2.2 : 0.4) : 1) / (1 + Math.max(0, camera.position.y - (LOC === 'glacier' ? 3000 : 0)) / 1500);
   _sc.copy(sunLight.color).multiplyScalar(sunLight.intensity * (n > 0.9 ? 0.6 : 1.0));
   _top.set(n > 0.9 ? 0x0b1220 : n > 0.3 ? 0x6a6f8e : 0x8fb2dc).multiplyScalar(n > 0.9 ? 0.25 : 1.0);
   _bot.set(n > 0.9 ? 0x05070b : n > 0.3 ? 0x4a3c3c : 0x7d8894);
   const cine = state.replay || state.view === 'flyby';   // depth of field for cinematic views only, never while flying
   postfx.update(state.paused ? 0 : dt, { sun, sunCol: _sc, skyTop: _top, skyBot: _bot, fogCol: scene.fog.color, fogD: scene.fog.density, night: n,
-    cover: n > 0.9 ? 0.38 : n > 0.3 ? 0.5 : 0.44, dof: cine ? 1 : 0, focus: camera.position.distanceTo(ac.pos), flare: n < 0.3 });
+    cover: LOC === 'glacier' && settings.weather === 'snow' ? 0.72 : n > 0.9 ? 0.38 : n > 0.3 ? 0.5 : 0.44, dof: cine ? 1 : 0, focus: camera.position.distanceTo(ac.pos), flare: n < 0.3 });
 }
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
@@ -1052,7 +1134,8 @@ function physics(dt) {
     interp.apos.copy(ac.pos); interp.aquat.copy(ac.quat); interp.spos.copy(ship.position); interp.squat.copy(ship.quaternion);
     ship.update(DT);
     ac.step(DT, env);
-    ops.checkWires(ac);
+    if (LOC === 'carrier') ops.checkWires(ac);
+    else if (valley && valley.active) { const r = valley.update(DT, ac); if (r) { flash(r.msg, r.done ? 12 : 3); if (r.done) recorder.event(state.simTime, 'valley', r.msg, 'info'); } }
     state.simTime += DT;
     acc -= DT; n++;
     if (ac.crashed) break;
@@ -1080,9 +1163,12 @@ function frame(now) {
   beginInterp();
   env.groundUnder = env.surface(ac.pos.x, ac.pos.z).h;
   const eyeW = EYE.clone().applyQuaternion(ac.quat).add(ac.pos);
-  const lens = ac.pos.distanceTo(ship.position) < 9000 ? ship.updateLens(eyeW, ops.waveOff, time) : null;
+  const lens = LOC === 'carrier' && ac.pos.distanceTo(ship.position) < 9000 ? ship.updateLens(eyeW, ops.waveOff, time) : null;
+  if (rwLights) rwLights.update(eyeW, tod.night || 0);
+  // the combiner is a faint green tint, not a lit panel: scale it with the light outside
+  if (nodes.HUD_Glass && nodes.HUD_Glass.material) nodes.HUD_Glass.material.opacity = 0.08 * (1 - 0.85 * (tod.night || 0));
   env.lens = lens;
-  if (live) ops.update(dt, ac, lens);
+  if (live && LOC === 'carrier') ops.update(dt, ac, lens);
   handleEvents();
   if (live && state.started) {
     recorder.sample(dt, state.simTime, ac, ship, lens);
@@ -1099,6 +1185,7 @@ function frame(now) {
   fx.update(state.paused ? 0 : dt, ac, model, env, { ship, sea: settings.sea });
   sunLight.position.copy(ac.pos).addScaledVector(sun, 250); sunLight.target.position.copy(ac.pos);
   water.update(dt, camera, ship);   // the sea keeps moving behind the menu and the pause screen
+  if (LOC === 'glacier') terrain.update(camera, sun, dt);
   // night sky follows the camera; landing light on with the gear down
   night.stars.position.copy(camera.position);
   night.moon.position.copy(camera.position).addScaledVector(sun, 80000);
@@ -1129,7 +1216,8 @@ function frame(now) {
   } else hud.clear(envHud);
   $('statusbar').hidden = inside || !state.started;
   if (!inside) statusBar();
-  displays.update(ac, { ship, windKt: env.windKt, lens, mode: ac.onGround ? 'DECK' : ac.gear > 0.5 ? 'LAND' : 'NAV' }, now);
+  const navT = LOC !== 'glacier' ? null : valley && valley.next ? { position: valley.next.pos, label: 'GATE ' + (valley.i + 1) } : { position: V3(terrain.rw.mid.x, 0, terrain.rw.mid.y), label: 'THOISE' };
+  displays.update(ac, { ship: navT ? { position: navT.position } : ship, navLabel: navT ? navT.label : null, windKt: env.windKt, lens, mode: ac.onGround ? (LOC === 'glacier' ? 'TAXI' : 'DECK') : ac.gear > 0.5 ? 'LAND' : 'NAV' }, now);
   // g tolerance builds with time: grey-out creeps in over a few seconds of sustained g, clears faster
   const gIn = ac.crashed ? 1 : ac.t.nz;
   state.gEff = (state.gEff ?? 1) + (gIn - (state.gEff ?? 1)) * Math.min(1, dt / (gIn > (state.gEff ?? 1) ? 2.8 : 1.2));
@@ -1144,7 +1232,7 @@ function frame(now) {
   draw();
   endInterp();
 }
-window.__sim = { postfx, water, renderStep(dt) { frame(last + dt * 1000); }, get renderer() { return renderer; }, get model() { return model; }, fx, tod: () => tod, keys, probeTipWorld, ac, state, ship, env, camera, nodes, hud, ops, settings, cockpit, instructor, recorder, replay, debrief, tanker, bindings, control, startLesson, startScenario, applyTimeOfDay, lookAtControl, get ready() { return cockpitReady && tanker.ready; },
+window.__sim = { postfx, water, terrain, get valley() { return valley; }, get rwLights() { return rwLights; }, get location() { return LOC; }, renderStep(dt) { frame(last + dt * 1000); }, get renderer() { return renderer; }, get model() { return model; }, fx, tod: () => tod, keys, probeTipWorld, ac, state, ship, env, camera, nodes, hud, ops, settings, cockpit, instructor, recorder, replay, debrief, tanker, bindings, control, startLesson, startScenario, applyTimeOfDay, lookAtControl, get ready() { return cockpitReady && tanker.ready; },
   // run the whole sim without rendering (for tests): physics, carrier ops, events, instructor, recorder, tanker
   tick(secs, ctl) {
     const h = 1 / 60, n = Math.round(secs / h);

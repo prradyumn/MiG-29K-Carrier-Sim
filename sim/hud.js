@@ -283,7 +283,7 @@ export class Displays {
     g.fillStyle = '#e8fff0'; g.textAlign = 'left'; g.font = '20px "JetBrains Mono", monospace';
     g.fillText('HDG ' + String(Math.round(hdg)).padStart(3, '0'), 22, 80);
     if (env.shipRange != null) {
-      g.fillText('CARRIER ' + String(Math.round(env.shipBrg)).padStart(3, '0') + '° ' + (env.shipRange / 1000).toFixed(1) + ' KM', 22, 108);
+      g.fillText((env.navLabel || 'CARRIER') + ' ' + String(Math.round(env.shipBrg)).padStart(3, '0') + '° ' + (env.shipRange / 1000).toFixed(1) + ' KM', 22, 108);
     }
     g.textAlign = 'right'; g.fillText('20 KM', W - 22, 80);
     g.fillText('WIND ' + Math.round(env.windKt || 0) + ' KT', W - 22, 108);

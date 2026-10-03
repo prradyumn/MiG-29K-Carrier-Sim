@@ -269,6 +269,29 @@ export const LESSONS = [
         enter: (s, I) => { I.ref = { f0: s.ac.fuel }; }, done: (s, I) => s.ac.fuel > I.ref.f0 + 800 },
       { say: 'Back out gently, probe in. Well done: that is a full carrier syllabus.', target: 'probe', why: '', done: s => s.ac.probeCmd === 0 },
     ],
+    next: 'mountain',
+  },
+  {
+    id: 'mountain', n: 13, title: 'High-altitude landing', scenario: 'thoise_app', minutes: 4,
+    summary: 'Land at Thoise in the Nubra valley, 3,060 m up between the Karakoram walls: thin air, a 3° PAPI glide path and a longer rollout.',
+    steps: [
+      { say: 'Final for Thoise, runway 10, eight kilometres out. The field is at 3,060 metres: the air is about a quarter thinner than at sea level.', target: null,
+        why: 'Wings and engines respond to indicated airspeed. The wheels respond to true speed over the ground, which is about 17 percent higher here: everything happens faster and the rollout is longer.',
+        done: s => s.terrain && s.terrain.runwayLocal(s.ac.pos.x, s.ac.pos.z).along > -6000 },
+      { say: 'Fly the PAPI: the four lights to the left of the touchdown zone. Two white and two red is the 3 degree glide path. More white, you are high. More red, you are low.', target: null,
+        why: 'Each PAPI unit is aimed a little steeper than the one beside it, so the white and red split shows your angle to the touchdown point.',
+        tick: (s, I) => { const T = s.terrain; if (!T) return; const L = T.runwayLocal(s.ac.pos.x, s.ac.pos.z), d = 300 - L.along;
+          if (d > 400) I.metric('gsErr', Math.abs(Math.atan2(s.ac.pos.y - T.rw.e10, d) * 57.3 - 3)); },
+        done: s => s.terrain && s.terrain.runwayLocal(s.ac.pos.x, s.ac.pos.z).along > -2500,
+        fail: s => s.terrain && s.ac.pos.y - s.terrain.heightAt(s.ac.pos.x, s.ac.pos.z) < 60 && s.terrain.runwayLocal(s.ac.pos.x, s.ac.pos.z).along < -1500 ? 'Too low on the approach' : null },
+      { say: 'Gear down, three green. Flaps landing. Hold 10.5 degrees AoA and the centreline: the valley wind will drift you.', target: 'gear',
+        why: 'Mountain valleys channel the wind and stir up turbulence near the ground. Small, early corrections.',
+        done: s => s.terrain && s.terrain.runwayLocal(s.ac.pos.x, s.ac.pos.z).along > -500, fail: s => s.ac.gear < 0.9 ? 'Gear not down on short final' : null },
+      { say: 'Fly it onto the runway in the first 600 metres. Throttle to idle on touchdown, then wheel brakes, X.', target: null,
+        why: 'With the higher true speed, a long float uses up runway fast. Put it down, then stop.',
+        done: s => s.ac.onGround && s.ac.vel.length() < 12 },
+      { say: 'Stopped at 3,060 metres. Check the debrief for your touchdown point and sink rate.', target: null, why: '', done: (s, I, dt) => I.hold(true, 3, dt) },
+    ],
   },
 ];
 

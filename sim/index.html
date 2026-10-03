@@ -174,6 +174,7 @@
   @media (max-width: 520px) { .brand h1 { font-size: 42px; } #menu { padding-inline: 16px; } }
   .capture #msg, .capture #statusbar, .capture #ctltip, .capture #checklist { display: none !important; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  .locgroup { font-size: 13px; letter-spacing: .14em; text-transform: uppercase; color: #ffb35c; margin: 18px 0 6px; }
 </style>
 
 <canvas id="gl"></canvas>
@@ -243,6 +244,14 @@
       <button class="mission" data-scn="tanker"><b>Air refuelling</b><span class="spec">5,000 m · 500 km/h</span><span class="d">Join a buddy tanker MiG-29K, probe out, and plug the drogue at walking pace.</span></button>
       <button class="mission" data-scn="free"><b>Free flight</b><span class="spec">3,000 m · 830 km/h</span><span class="d">Clean aircraft over the Arabian Sea, carrier steaming north at 23 knots.</span></button>
     </div>
+    <h3 class="locgroup">Siachen Glacier · Karakoram</h3>
+    <p class="note" style="margin:0 0 10px">Real terrain from 30 m elevation data: 82 × 126 km of the Siachen glacier, the Saltoro ridge and the Nubra valley, with the high-altitude airbase at Thoise (3,060 m). Thin air: longer take-off rolls, faster approaches.</p>
+    <div class="missions">
+      <button class="mission" data-scn="thoise"><b>Mountain take-off</b><span class="spec">Thoise · 3,060 m</span><span class="d">Lined up on runway 10, 3,048 m. At this elevation the air is a quarter thinner: full afterburner, rotate at about 280 km/h.</span></button>
+      <button class="mission" data-scn="glacier"><b>Glacier free flight</b><span class="spec">6,500 m · Siachen</span><span class="d">Over the snout of the Siachen glacier, heading up the 76 km ice stream towards Indira Col and the K2 massif.</span></button>
+      <button class="mission" data-scn="valley"><b>Valley run</b><span class="spec">230 m AGL · gates</span><span class="d">Low level up the glacier through gates every 3.5 km, timed. The valley walls rise 2,000 m on both sides.</span></button>
+      <button class="mission" data-scn="thoise_app"><b>High-altitude landing</b><span class="spec">8 km final · 3° PAPI</span><span class="d">Final approach to Thoise runway 10 down the Nubra valley. True airspeed is higher than it reads: fly the PAPI and land in the touchdown zone.</span></button>
+    </div>
     </div>
   </section>
   <button id="resume" hidden>Resume</button>
@@ -256,6 +265,7 @@
       <label for="opt-sea">Sea state<small>Deck motion, air wake behind the ship</small></label><select id="opt-sea"><option value="0">Calm</option><option value="1">Moderate</option><option value="1.8">Rough</option></select>
       <label for="opt-mouse">Mouse stick<small>Mouse position flies the jet (toggle with Y)</small></label><input type="checkbox" id="opt-mouse">
       <label for="opt-tod">Time of day<small>Free missions (lessons set their own)</small></label><select id="opt-tod"><option value="day">Day</option><option value="dusk">Dusk</option><option value="night">Night</option></select>
+      <label for="opt-weather">Mountain weather<small>Siachen missions: cloud in the valleys and snowfall</small></label><select id="opt-weather"><option value="clear">Clear</option><option value="snow">Snow and valley cloud</option></select>
       <label for="opt-rumble">Controller rumble<small>Stick shaker, touchdown, trap</small></label><input type="checkbox" id="opt-rumble" checked>
       <label>Controllers<small>Gamepad, joystick, HOTAS mapping</small></label><button class="btn" id="opt-bind" type="button">Set up…</button>
       <label for="opt-quality">Graphics<small>Ultra: full resolution · Low: no clouds, bloom or AO</small></label><select id="opt-quality"><option value="ultra">Ultra</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low (fast)</option></select>

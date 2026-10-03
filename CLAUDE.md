@@ -30,6 +30,7 @@ The user's brief (Pradyumn): "very realistic", "as realistic as possible", with 
 | `sim/ocean.js` | `Ocean`: 20 Gerstner waves on a camera-following polar grid, displaced in the vertex shader only where the grid can carry them; normals, crests and whitecaps per pixel with footprint anti-aliasing; unresolved wave slopes go into roughness (Toksvig), so the far sea becomes a glitter field rather than a mirror; wind slicks; light through the crests (subsurface tint); the carrier's wake (white water, turquoise bubble trail, Kelvin arms, bow wave). Visual only: the physics sea stays at y = 0. |
 | `sim/postfx.js` | `PostFX`: EffectComposer on an HDR MSAA target with a depth texture. `ScenePost` does AO (contact shading, fades out by 400 m), half-resolution volumetric clouds (1.5–3.2 km slab, 3D Worley/fbm noise), heat haze through the exhaust plumes, a sun flare, particles (drawn after the clouds, soft-depth-tested), then camera motion blur with per-object reprojection (own jet and tanker stay sharp) and depth of field in replays. Then bloom, tone mapping and a grade (vignette, chromatic edge, grain). `setQuality()` per preset. |
 | `sim/cockpitdetail.js` | Attaches `model/cockpit_detail.json` (K-36D-3.5 seat, tub frames and looms, canopy sills, fasteners, MFD rockers, glareshield roll, mirror housings, detailed pilot `Pilot2`), retires the airframe's simple seat and pilot, and gives the cockpit paint a triplanar crinkle finish. |
+| `sim/terrain.js`, `sim/glaciermissions.js`, `sim/snowfall.js` | The Siachen / Thoise location (see below). `sim/model/glacier/` holds its data. |
 | `sim/aircraftdetail.js` | `AircraftDetail`: shader-side weathering on the skin (seam grime from the baked AO, salt streaks, exhaust soot, paint grain and scratches, wet skin on a wet deck) and heat-tinted nozzle petals. |
 | `sim/ops.js` | `CarrierOps`: wire engagement, LSO voice calls, wave-off, bolter and hook-skip detection, grading. |
 | `sim/hud.js` | Conformal HUD drawn in a 2D canvas and clipped to the combiner glass, plus the MFI-10-7 display canvases (boot test, engine page). |
@@ -43,6 +44,41 @@ The user's brief (Pradyumn): "very realistic", "as realistic as possible", with 
 | `renders/` | Blender renders and in-sim screenshots from development. |
 | `promo/` | The 64.6 s launch film ("Cleared Hot") and everything that builds it: shot scripts, GSAP composition, audio and render scripts (see `promo/README.md`). The LinkedIn cut lives in `promo/out/`; the 1080p60 master is too big for GitHub and is kept locally only. |
 | `mig29k_carrier_sim.zip` | The same runnable sim, zipped for sharing. |
+
+## Second location: Siachen Glacier and Thoise (October 2026)
+
+Real terrain, chosen from the menu (Free missions → Siachen Glacier · Karakoram). Loaded on first use (about 50 MB).
+- **Data:** Copernicus GLO-30 30 m DSM (ESA, public, AWS open data), tiles N34–N35 / E076–E077, cropped to 76.65–77.55 E × 34.58–35.72 N: 82 × 126 km, 2,632–7,734 m, covering the whole Siachen glacier (snout 35.20 N 77.20 E, head at Indira Col) and Thoise airbase (runway 10/28, 3,048 m, 107°, 3,062 m).
+- **Pipeline (`glacier/scripts/`, raw data and intermediates in the gitignored `glacier/dem/`, `glacier/build/`):**
+  1. `dem.py`: mosaic, resample to a 30 m world grid (x east, z south, y = metres above sea level, origin at the map centre), grade the airfield platform (south of the runway is the base side), derive masks (glacier ice, snow, debris, river gravel) from height, slope and relief. Writes `sim/model/glacier/height.png` (16-bit packed in R/G), `mask.png`, `meta.json`.
+  2. `materials.py` (Blender): procedural rock, snow, ice, debris and gravel on 4D torus noise (seamless), baked to albedo, roughness and normal.
+  3. `photo_textures.py`: Gemini ("nano banana") photo albedos from `glacier/build/gem/` made seamless, brightness-matched to the Blender bakes, with photo-derived normals blended 70/30 with the Blender normals. The Blender originals are kept in `glacier/build/tex_blender_backup/`.
+  4. `terrain_bake.py` (Blender, Cycles): the full terrain mesh (1.27 M vertices at 90 m), baked ambient occlusion and a geology tint (2048 × 3150).
+  5. `airbase.py` (Blender): runway with painted markings, taxiway and links, apron, six shelters, hangar, tower, buildings, fuel farm, roads, light fixtures, windsock; embedded to `sim/model/glacier/airbase.json`.
+- **Runtime:**
+  - `sim/terrain.js`: a geometry clipmap of 11 levels × 128² (2 m to 2 km spacing, snapped per level, morphing at the edges). Per-pixel shading: height-field normals and curvature, the masks and slope, texture arrays (one sampler per map type), glacier flow stripes and crevasses, debris ponds and ice cliffs, scree, fall-line streaks, the baked AO and geology, and ray-marched sun shadows (16 steps). The physics queries are `heightAt`, `surface` and `paveHeight` (wheels ride the exact runway profile; the rendered ground under paved areas sits 1.5 m lower so it never covers them).
+  - `sim/glaciermissions.js`: the valley-run course (a greedy walk up the real glacier floor from the snout), 16 gates every 3.5 km, runway and approach lights, PAPI, and the landing grade.
+  - `sim/snowfall.js`: snow particles.
+  - `main.js`: `setLocation()` (hides the ship and sea), `setupGlacier()`.
+- **Missions:**
+  - `thoise`: take-off from runway 10.
+  - `glacier`: free flight over the snout at 6,500 m.
+  - `valley`: gate run.
+  - `thoise_app`: 8 km final, 3°.
+  - Lesson 13 (`mountain`): high-altitude landing.
+  - Settings → Mountain weather: clear, or snow and valley cloud.
+- **At the glacier:**
+  - The wind is channelled along the valley (a 5 m/s headwind for runway 10). The sea's 7 m/s northerly is a full crosswind there and flips the jet on touchdown.
+  - Air density comes from altitude: a take-off roll of about 600 m on full afterburner; at 3,500 m, IAS 543 km/h is TAS 649 km/h.
+  - A landing rollout is about 1.1 km.
+  - The cloud slab is 7,200–8,800 m, or 4,300–6,600 m in snow.
+  - The fog is 0.4× the sea fog.
+- **Pitfalls hit while building it:**
+  - Map-aligned images must load with `flipY = false`; otherwise the masks are mirrored north–south against the heights.
+  - More than 16 samplers fails to compile.
+  - The runway's matrices are only valid after the first render.
+  - On approach the runway sits about 13.5° below the boresight, at the edge of the cockpit's over-nose view: fly the HUD flight-path marker and the PAPI.
+- **Measured** (1080p, headless GPU Chrome, a loaded machine): Thoise cockpit 26 fps, valley and glacier chase 36 fps; the carrier deck was 23 fps on the same run. Physics: take-off airborne after 14 s; landing graded "Good landing", 475 m past the threshold, 1.9 m/s sink; hands-off flight into the valley wall ends in "Controlled flight into terrain"; gate passes register.
 
 ## Running it locally (and the "keeps restarting" bug)
 
@@ -112,7 +148,7 @@ The user's brief (Pradyumn): "very realistic", "as realistic as possible", with 
 
 ## Lessons (`instructor.js`)
 
-1 cold start, 2 ski-jump launch, 3 basic handling, 4 on-speed AoA, 5 flying the ball (wave-off), 6 the trap, 7 carrier circuit, 8 touch-and-go (bolter), 9 engine failure on launch (with airstart), 10 in-flight emergencies (fire, FCS, hydraulics), 11 night trap, 12 air refuelling.
+1 cold start, 2 ski-jump launch, 3 basic handling, 4 on-speed AoA, 5 flying the ball (wave-off), 6 the trap, 7 carrier circuit, 8 touch-and-go (bolter), 9 engine failure on launch (with airstart), 10 in-flight emergencies (fire, FCS, hydraulics), 11 night trap, 12 air refuelling, 13 high-altitude landing at Thoise.
 
 Each step speaks its instruction and shows why. The step's control is highlighted in the cockpit and points by an arrow when off screen; T turns the head to it. Mistakes come from the lesson's `fail` checks and from `ac.event('mistake')`. The score is 100 minus mistakes and flying errors (glide slope, lineup, AoA, altitude in turns), shown as 1–3 stars. The debrief opens at the end.
 

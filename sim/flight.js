@@ -499,6 +499,8 @@ export class Aircraft {
       const pen = (surf.h - (wp.y - wh.r)) * surf.n.y;
       if (pen <= 0) { wh.comp = 0; continue; }
       if (surf.water) { this.crash('Ditched in the sea'); return; }
+      if (surf.rough && this.vel.length() > 22) { this.crash(this.lastPave ? 'Ran off the paved surface at speed' : 'Landed off the runway'); return; }
+      if (surf.pavement) this.lastPave = true;
       wh.contact = true; this.wow[i] = true; this.onGround = true; this.onDeck = !!surf.deck;
       const wl = this.omega.clone().cross(tmpP).applyQuaternion(q_);
       const pv = this.vel.clone().add(wl).sub(surf.v);
@@ -602,7 +604,7 @@ export class Aircraft {
       if (!surf) continue;
       const pen = surf.h - wp.y;
       if (pen > 0 && surf.water) { this.crash('Impact with the sea'); return; }
-      if (pen > tol) { this.crash(tol > 0.1 ? 'Tail strike: the nozzles hit the deck' : 'Airframe struck the deck'); return; }
+      if (pen > tol) { this.crash(surf.terrain && !surf.pavement ? 'Controlled flight into terrain' : tol > 0.1 ? 'Tail strike: the nozzles hit the ' + (surf.terrain ? 'runway' : 'deck') : surf.terrain ? 'Airframe struck the runway' : 'Airframe struck the deck'); return; }
       if (pen > 0) {
         if (this.scrape === 0) this.event('scrape', { pos: wp.clone() });
         this.scrape = 1.5;
